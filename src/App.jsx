@@ -16,8 +16,8 @@ function useIsTablet(){
 }
 
 // ── Supabase (direct REST, hardcoded creds — dedicated stock-tracker project) ──
-const SUPA_URL = "https://pisogfynqghabbohhyri.supabase.co";
-const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBpc29nZnlucWdoYWJib2hoeXJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMjA4NzAsImV4cCI6MjA5Njc5Njg3MH0.AmqoAhA8Xo0KlOJi36JNOnlt64TLx2AQQ8cmIB2HKps";
+const SUPA_URL = "https://tpeffpenponsufclvyvo.supabase.co";
+const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwZWZmcGVucG9uc3VmY2x2eXZvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMTk3NDQsImV4cCI6MjA5Njc5NTc0NH0.g_qr4rzg7pojunRetY_0Jbw5BfqrB8GAL31X9DMjdZw";
 const H = {
   "Content-Type":"application/json",
   "apikey":SUPA_KEY,
