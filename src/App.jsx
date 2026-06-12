@@ -69,11 +69,16 @@ const itemCalc = (it) => {
   return { totalCost, totalPieces, expectedSales, profit: expectedSales - totalCost };
 };
 const batchCalc = (b) => {
-  let spent=0, sales=0;
-  (b.items||[]).forEach(it=>{ const c=itemCalc(it); spent+=c.totalCost; sales+=c.expectedSales; });
+  let spent=0, sales=0, pieces=0;
+  (b.items||[]).forEach(it=>{ const c=itemCalc(it); spent+=c.totalCost; sales+=c.expectedSales; pieces+=c.totalPieces; });
   const profitOnStock = sales - spent;
   const expenses = nv(b.expenses);
-  return { spent, sales, profitOnStock, expenses, takeHome: profitOnStock - expenses, margin: sales>0 ? profitOnStock/sales : 0 };
+  const capital = nv(b.capital);
+  return { spent, sales, pieces, profitOnStock, expenses, capital,
+    toSpend: spent + expenses,
+    remaining: capital - spent - expenses,
+    takeHome: profitOnStock - expenses,
+    margin: sales>0 ? profitOnStock/sales : 0 };
 };
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -107,6 +112,8 @@ const IC = {
   logout:"M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1",
   check:"M5 13l4 4L19 7",
   back:"M19 12H5m7 7l-7-7 7-7",
+  print:"M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z",
+  wallet:"M21 12V7H5a2 2 0 010-4h14v4M3 5v14a2 2 0 002 2h16v-5M18 12a2 2 0 000 4h4v-4h-4z",
   beer:"M5 8h11v9a3 3 0 01-3 3H8a3 3 0 01-3-3V8zm11 1h2a2 2 0 012 2v2a2 2 0 01-2 2h-2M8 4v2m3-2v2m3-2v2",
   alert:"M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
 };
@@ -154,7 +161,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function Dashboard({batches, user, onEdit, onDelete, onNew}){
+function Dashboard({batches, user, onEdit, onDelete, onNew, onPrint}){
   const C=useTheme(); const TT=useTT();
   const isMobile=useIsMobile(); const isTablet=useIsTablet();
 
@@ -243,6 +250,9 @@ function Dashboard({batches, user, onEdit, onDelete, onNew}){
                   <div style={{fontSize:11,color:C.muted,marginTop:2}}>{dateStr} · {b.items.length} items</div>
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  <button onClick={()=>onPrint(b)} title="Print report" style={{background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                    <Ico d={IC.print} size={14} color={C.muted}/>
+                  </button>
                   {canDo(user,"canEdit")&&(
                     <button onClick={()=>onEdit(b)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
                       <Ico d={IC.edit} size={14} color={C.teal}/>
@@ -277,13 +287,21 @@ function Dashboard({batches, user, onEdit, onDelete, onNew}){
 // ── STOCK ENTRY ───────────────────────────────────────────────────────────────
 const blankItem = () => ({ id:uid(), name:"", unitsBought:"", costPerUnit:"", piecesPerUnit:"", pricePerPiece:"" });
 const toDraft = (b) => b
-  ? { id:b.id, name:b.name, date:b.date||"", expenses:String(b.expenses??""),
+  ? { id:b.id, name:b.name, date:b.date||"", capital:String(b.capital??""), expenses:String(b.expenses??""),
       items:(b.items||[]).map(it=>({ id:it.id||uid(), name:it.name,
         unitsBought:String(it.unitsBought??""), costPerUnit:String(it.costPerUnit??""),
         piecesPerUnit:String(it.piecesPerUnit??""), pricePerPiece:String(it.pricePerPiece??"") })) }
-  : { id:null, name:"", date:new Date().toISOString().slice(0,10), expenses:"", items:[blankItem()] };
+  : { id:null, name:"", date:new Date().toISOString().slice(0,10), capital:"", expenses:"", items:[blankItem()] };
+// turn the in-progress form into a batch-shaped object (numbers) for printing
+const draftToBatch = (d) => ({
+  name: d.name.trim() || d.date || "Stock plan", date: d.date || null,
+  capital: nv(d.capital), expenses: nv(d.expenses),
+  items: d.items.filter(it=>it.name.trim()!=="").map(it=>({
+    id:it.id, name:it.name.trim(), unitsBought:nv(it.unitsBought), costPerUnit:nv(it.costPerUnit),
+    piecesPerUnit:nv(it.piecesPerUnit), pricePerPiece:nv(it.pricePerPiece) })),
+});
 
-function StockEntry({initial, onSaved, onCancel}){
+function StockEntry({initial, onSaved, onCancel, onPrint}){
   const C=useTheme(); const isMobile=useIsMobile();
   const [draft,setDraft]=useState(()=>toDraft(initial));
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
@@ -303,7 +321,7 @@ function StockEntry({initial, onSaved, onCancel}){
     if(!draft.name.trim() && !draft.date){ setError("Give this stock a name or pick a date."); return; }
     if(items.length===0){ setError("Add at least one item with a name."); return; }
     setError(""); setBusy(true);
-    const payload={ name:draft.name.trim()||draft.date, date:draft.date||null, expenses:nv(draft.expenses), items };
+    const payload={ name:draft.name.trim()||draft.date, date:draft.date||null, capital:nv(draft.capital), expenses:nv(draft.expenses), items };
     try{
       const rows = isEdit ? await stockDb.patch(draft.id,payload) : await stockDb.insert(payload);
       onSaved(rows && rows[0] ? rows[0] : { ...payload, id:draft.id||uid() });
@@ -319,9 +337,29 @@ function StockEntry({initial, onSaved, onCancel}){
         <Ico d={IC.back} size={15} color={C.muted}/> Back to dashboard
       </button>
 
-      {/* batch details */}
+      {/* capital + batch details */}
       <Card style={{padding:isMobile?16:22,marginBottom:16}}>
         <SLabel style={{marginBottom:14}}>{isEdit?"Edit stock":"New stock"}</SLabel>
+
+        {/* Available capital — money you're taking to the market */}
+        <div style={{background:C.tealBg,border:`1px solid ${C.teal}33`,borderRadius:10,padding:isMobile?"12px 14px":"14px 16px",marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <Ico d={IC.wallet} size={16} color={C.teal}/>
+            <label style={{...lbl,margin:0,color:C.teal}}>Available capital before buying (SSP)</label>
+          </div>
+          <input type="number" value={draft.capital} placeholder="e.g. 2,000,000"
+            style={{...mkINP(C),fontSize:18,fontWeight:700}} onFocus={focus} onBlur={blur}
+            onChange={e=>setField("capital",e.target.value)}/>
+          {nv(draft.capital)>0 && (
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginTop:10,fontSize:12}}>
+              <span style={{color:C.muted}}>Buying {fmt(totals.spent)}{totals.expenses>0?` + expenses ${fmt(totals.expenses)}`:""}</span>
+              <span style={{fontWeight:700,color:totals.remaining>=0?C.green:C.red}}>
+                {totals.remaining>=0?`Cash left: ${fmt(totals.remaining)} SSP`:`Over budget by ${fmt(-totals.remaining)} SSP`}
+              </span>
+            </div>
+          )}
+        </div>
+
         <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr 1fr",gap:12}}>
           <div><label style={lbl}>Stock name</label>
             <input value={draft.name} placeholder="e.g. Week of 9 June" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("name",e.target.value)}/></div>
@@ -390,7 +428,11 @@ function StockEntry({initial, onSaved, onCancel}){
             </div>
           )}
           {isMobile&&<div style={{flex:1}}><div style={{fontSize:10,color:C.muted}}>Take-home</div><div style={{fontSize:16,fontWeight:700,color:totals.takeHome>=0?C.green:C.red}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)} SSP</div></div>}
-          <button onClick={onCancel} disabled={busy} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"10px 16px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1}}>Cancel</button>
+          <button onClick={()=>onPrint(draftToBatch(draft))} disabled={busy} title="Print shopping list to carry to the market"
+            style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"10px 14px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1,display:"flex",alignItems:"center",gap:7}}>
+            <Ico d={IC.print} size={16} color={C.text}/>{!isMobile&&" Print plan"}
+          </button>
+          {!isMobile&&<button onClick={onCancel} disabled={busy} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"10px 16px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1}}>Cancel</button>}
           <button onClick={save} disabled={busy} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"10px 20px",fontWeight:700,fontSize:13,cursor:busy?"not-allowed":"pointer",opacity:busy?0.7:1,display:"flex",alignItems:"center",gap:8}}>
             <Ico d={IC.check} size={16} color="#09111e"/> {busy?"Saving…":isEdit?"Save changes":"Save stock"}
           </button>
@@ -414,6 +456,185 @@ function ConfirmDelete({batch,onCancel,onConfirm}){
           <button onClick={onCancel} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 16px",fontSize:13,cursor:"pointer"}}>Keep it</button>
           <button onClick={onConfirm} style={{background:C.red,border:"none",borderRadius:8,color:"#fff",padding:"9px 16px",fontWeight:700,fontSize:13,cursor:"pointer"}}>Delete</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PRINTABLE REPORTS ─────────────────────────────────────────────────────────
+// A clean white frame. On screen it floats over the app; when printed, only the
+// report area shows (the print CSS hides everything else).
+const RP = { ink:"#111827", soft:"#6b7280", line:"#d1d5db", lite:"#f3f4f6", teal:"#0e7c6b", red:"#b91c1c", green:"#15803d" };
+const money = v => `SSP ${nv(v).toLocaleString()}`;
+const dmy = d => d ? new Date(d+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "—";
+
+function PrintFrame({onClose, children}){
+  const C=useTheme();
+  return(
+    <div className="hzx-print-overlay" style={{position:"fixed",inset:0,background:"#586577",zIndex:100,overflowY:"auto"}}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          .hzx-print-area, .hzx-print-area * { visibility: visible !important; }
+          .hzx-print-area { position:absolute !important; left:0; top:0; width:100%; box-shadow:none !important; margin:0 !important; }
+          .hzx-no-print { display:none !important; }
+          @page { margin: 14mm; }
+        }
+      `}</style>
+      <div className="hzx-no-print" style={{position:"sticky",top:0,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,padding:"12px 16px",background:C.header,borderBottom:`1px solid ${C.cardB}`}}>
+        <span style={{color:C.text,fontSize:13,fontWeight:600}}>Print preview</span>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onClose} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 16px",fontSize:13,cursor:"pointer"}}>Close</button>
+          <button onClick={()=>window.print()} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"9px 18px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+            <Ico d={IC.print} size={16} color="#09111e"/> Print / Save PDF
+          </button>
+        </div>
+      </div>
+      <div className="hzx-print-area" style={{maxWidth:780,margin:"18px auto",background:"#fff",color:RP.ink,
+        padding:"34px 38px",borderRadius:4,boxShadow:"0 10px 40px rgba(0,0,0,0.3)",
+        fontFamily:"'Inter',system-ui,sans-serif",fontSize:13,lineHeight:1.5}}>
+        {children}
+      </div>
+      <div style={{height:30}}/>
+    </div>
+  );
+}
+
+function ReportHeader({title}){
+  return(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderBottom:`2px solid ${RP.ink}`,paddingBottom:14,marginBottom:18}}>
+      <div>
+        <div style={{fontSize:20,fontWeight:800,letterSpacing:"-0.01em"}}>HOTZONEX REFRESHMENT CENTRE</div>
+        <div style={{fontSize:12,color:RP.soft,marginTop:2}}>Juba, South Sudan · all amounts in SSP</div>
+        <div style={{fontSize:15,fontWeight:700,color:RP.teal,marginTop:10}}>{title}</div>
+      </div>
+      <div style={{textAlign:"right",fontSize:11,color:RP.soft}}>
+        <div>Printed</div>
+        <div style={{fontWeight:700,color:RP.ink}}>{new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}</div>
+        <div style={{marginTop:4}}>{new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
+      </div>
+    </div>
+  );
+}
+
+const Trow = ({cells, head, strong, right=[]}) => (
+  <tr>{cells.map((c,i)=>(
+    <td key={i} style={{padding:"7px 8px",borderBottom:`1px solid ${RP.line}`,
+      textAlign:right.includes(i)?"right":"left",fontWeight:head||strong?700:400,
+      background:head?RP.lite:"transparent",fontVariantNumeric:"tabular-nums",
+      whiteSpace:right.includes(i)?"nowrap":"normal"}}>{c}</td>
+  ))}</tr>
+);
+
+// One batch → a market shopping plan + the expected result
+function BatchReport({batch}){
+  const t=batchCalc(batch);
+  return(
+    <>
+      <ReportHeader title="Stock Purchase Plan"/>
+      <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:16}}>
+        <div><div style={{fontSize:11,color:RP.soft}}>Stock</div><div style={{fontWeight:700,fontSize:15}}>{batch.name}</div></div>
+        <div><div style={{fontSize:11,color:RP.soft}}>Date</div><div style={{fontWeight:700}}>{dmy(batch.date)}</div></div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:11,color:RP.soft}}>Available capital</div><div style={{fontWeight:800,fontSize:16,color:RP.teal}}>{money(t.capital)}</div></div>
+      </div>
+
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
+        <thead><Trow head cells={["#","Item","Units","Cost / unit","Total cost","Actual paid"]} right={[2,3,4,5]}/></thead>
+        <tbody>
+          {batch.items.map((it,i)=>{ const c=itemCalc(it);
+            return <Trow key={i} cells={[i+1, it.name, fmt(it.unitsBought), fmt(it.costPerUnit), fmt(c.totalCost), "__________"]} right={[2,3,4,5]}/>;
+          })}
+          <Trow strong cells={["", "TOTAL STOCK COST", "", "", money(t.spent), ""]} right={[2,3,4,5]}/>
+        </tbody>
+      </table>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,marginTop:18}}>
+        <div>
+          <div style={{fontSize:11,fontWeight:700,color:RP.soft,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Money at the market</div>
+          {[["Stock cost",money(t.spent)],["Other expenses",money(t.expenses)],["Total to spend",money(t.toSpend)],["Available capital",money(t.capital)]].map(([k,v])=>(
+            <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:`1px solid ${RP.line}`}}><span style={{color:RP.soft}}>{k}</span><span style={{fontWeight:600}}>{v}</span></div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",marginTop:2}}>
+            <span style={{fontWeight:800}}>{t.remaining>=0?"Cash left over":"OVER BUDGET BY"}</span>
+            <span style={{fontWeight:800,color:t.remaining>=0?RP.green:RP.red}}>{money(Math.abs(t.remaining))}</span>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:11,fontWeight:700,color:RP.soft,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Expected after selling</div>
+          {[["Total pieces",fmt(t.pieces)],["Expected sales",money(t.sales)],["Profit on stock",money(t.profitOnStock)],["Profit margin",`${(t.margin*100).toFixed(1)}%`]].map(([k,v])=>(
+            <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:`1px solid ${RP.line}`}}><span style={{color:RP.soft}}>{k}</span><span style={{fontWeight:600}}>{v}</span></div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",marginTop:2}}>
+            <span style={{fontWeight:800}}>Take-home profit</span>
+            <span style={{fontWeight:800,color:t.takeHome>=0?RP.green:RP.red}}>{money(t.takeHome)}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{marginTop:28,paddingTop:12,borderTop:`1px solid ${RP.line}`,display:"flex",justifyContent:"space-between",fontSize:11,color:RP.soft}}>
+        <span>Bought by: ____________________</span>
+        <span>Signature: ____________________</span>
+      </div>
+    </>
+  );
+}
+
+// All batches → a business summary
+function SummaryReport({batches}){
+  const g=batches.reduce((a,b)=>{ const t=batchCalc(b);
+    a.spent+=t.spent; a.sales+=t.sales; a.profit+=t.profitOnStock; a.expenses+=t.expenses; a.takeHome+=t.takeHome; return a;
+  },{spent:0,sales:0,profit:0,expenses:0,takeHome:0});
+  return(
+    <>
+      <ReportHeader title="Stock Summary Report"/>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead><Trow head cells={["Stock","Date","Spent","Expected sales","Take-home","Margin"]} right={[2,3,4,5]}/></thead>
+        <tbody>
+          {batches.map((b,i)=>{ const t=batchCalc(b);
+            return <Trow key={i} cells={[b.name, dmy(b.date), fmt(t.spent), fmt(t.sales), `${t.takeHome>=0?"+":""}${fmt(t.takeHome)}`, `${(t.margin*100).toFixed(1)}%`]} right={[2,3,4,5]}/>;
+          })}
+          <Trow strong cells={["TOTAL", `${batches.length} batches`, fmt(g.spent), fmt(g.sales), `${g.takeHome>=0?"+":""}${fmt(g.takeHome)}`, g.sales>0?`${(g.profit/g.sales*100).toFixed(1)}%`:"0.0%"]} right={[2,3,4,5]}/>
+        </tbody>
+      </table>
+      <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:16,marginTop:22}}>
+        {[["Money spent",money(g.spent)],["Expected sales",money(g.sales)],["Other expenses",money(g.expenses)],["Take-home profit",money(g.takeHome)]].map(([k,v])=>(
+          <div key={k}><div style={{fontSize:11,color:RP.soft}}>{k}</div><div style={{fontWeight:800,fontSize:15}}>{v}</div></div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// Reports tab — pick what to print
+function ReportsView({batches, onPrintBatch, onPrintSummary}){
+  const C=useTheme(); const isMobile=useIsMobile();
+  if(batches.length===0) return <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>No stock yet — add some, then you can print reports.</div>;
+  return(
+    <div>
+      <Card style={{padding:18,marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:C.text}}>Full stock summary</div>
+          <div style={{fontSize:12,color:C.muted,marginTop:2}}>All {batches.length} batches, totals and margins — one page.</div>
+        </div>
+        <button onClick={onPrintSummary} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"10px 18px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+          <Ico d={IC.print} size={16} color="#09111e"/> Print summary
+        </button>
+      </Card>
+      <SLabel style={{marginBottom:12}}>Print a single purchase plan</SLabel>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+        {batches.map(b=>{ const t=batchCalc(b);
+          return(
+            <Card key={b.id} style={{padding:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.name}</div>
+                <div style={{fontSize:11,color:C.muted,marginTop:2}}>{dmy(b.date)} · spent {fmt(t.spent)}</div>
+              </div>
+              <button onClick={()=>onPrintBatch(b)} title="Print plan" style={{flexShrink:0,background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 14px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:7}}>
+                <Ico d={IC.print} size={15} color={C.muted}/> Print
+              </button>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
@@ -509,6 +730,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
   const [batches,setBatches]=useState(null);        // null = loading
   const [toDelete,setToDelete]=useState(null);
   const [toast,setToast]=useState("");
+  const [report,setReport]=useState(null);   // {type:'batch'|'summary', batch?}
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const roleCfg=ROLES[user.role]||ROLES.viewer;
 
@@ -531,7 +753,8 @@ function MainApp({user, onLogout, isDark, setIsDark}){
 
   const NAV=[{id:"dashboard",label:"Dashboard",icon:"dashboard"}];
   if(canDo(user,"canEdit")) NAV.push({id:"entry",label:"Add Stock",icon:"add"});
-  const TITLES={dashboard:"Business Overview",entry:editing?"Edit Stock":"Add Stock"};
+  NAV.push({id:"reports",label:"Reports",icon:"print"});
+  const TITLES={dashboard:"Business Overview",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
 
   return(
     <ThemeCtx.Provider value={C}>
@@ -610,15 +833,18 @@ function MainApp({user, onLogout, isDark, setIsDark}){
             {batches===null
               ? <Loading/>
               : view==="dashboard"
-                ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={setToDelete} onNew={()=>navTo("entry")}/>
-                : canDo(user,"canEdit")
-                  ? <StockEntry key={editing?editing.id:"new"} initial={editing} onSaved={onSaved} onCancel={()=>{setView("dashboard");setEditing(null);}}/>
-                  : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to enter stock.</div>}
+                ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={setToDelete} onNew={()=>navTo("entry")} onPrint={b=>setReport({type:"batch",batch:b})}/>
+              : view==="reports"
+                ? <ReportsView batches={batches} onPrintBatch={b=>setReport({type:"batch",batch:b})} onPrintSummary={()=>setReport({type:"summary"})}/>
+              : canDo(user,"canEdit")
+                ? <StockEntry key={editing?editing.id:"new"} initial={editing} onSaved={onSaved} onCancel={()=>{setView("dashboard");setEditing(null);}} onPrint={b=>setReport({type:"batch",batch:b})}/>
+                : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to enter stock.</div>}
           </ErrorBoundary>
         </div>
       </div>
 
       {toDelete&&<ConfirmDelete batch={toDelete} onCancel={()=>setToDelete(null)} onConfirm={confirmDelete}/>}
+      {report&&<PrintFrame onClose={()=>setReport(null)}>{report.type==="summary"?<SummaryReport batches={batches}/>:<BatchReport batch={report.batch}/>}</PrintFrame>}
       {toast&&(
         <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:C.card,border:`1px solid ${C.cardB}`,borderRadius:20,padding:"10px 18px",fontSize:13,fontWeight:600,color:C.text,zIndex:60,display:"flex",alignItems:"center",gap:8,boxShadow:"0 8px 24px rgba(0,0,0,0.3)"}}>
           <Ico d={IC.check} size={15} color={C.teal}/> {toast}
