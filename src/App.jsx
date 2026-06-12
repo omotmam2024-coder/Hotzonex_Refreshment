@@ -16,8 +16,8 @@ function useIsTablet(){
 }
 
 // ── Supabase (direct REST, hardcoded creds — dedicated stock-tracker project) ──
-const SUPA_URL = "https://tpeffpenponsufclvyvo.supabase.co";
-const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwZWZmcGVucG9uc3VmY2x2eXZvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMTk3NDQsImV4cCI6MjA5Njc5NTc0NH0.g_qr4rzg7pojunRetY_0Jbw5BfqrB8GAL31X9DMjdZw";
+const SUPA_URL = "https://pisogfynqghabbohhyri.supabase.co";
+const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBpc29nZnlucWdoYWJib2hoeXJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMjA4NzAsImV4cCI6MjA5Njc5Njg3MH0.AmqoAhA8Xo0KlOJi36JNOnlt64TLx2AQQ8cmIB2HKps";
 const H = {
   "Content-Type":"application/json",
   "apikey":SUPA_KEY,
@@ -346,6 +346,7 @@ function StockEntry({initial, onSaved, onCancel, onPrint}){
 
   const lbl={fontSize:11,color:C.muted,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"};
   const focus=e=>e.target.style.borderColor=C.teal, blur=e=>e.target.style.borderColor=C.cardB;
+  const cellINP={width:"100%",background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:6,color:C.text,padding:"8px 9px",fontSize:13,outline:"none",boxSizing:"border-box",fontVariantNumeric:"tabular-nums",transition:"border-color 0.15s"};
 
   return(
     <div style={{paddingBottom:90}}>
@@ -392,36 +393,90 @@ function StockEntry({initial, onSaved, onCancel, onPrint}){
         <span style={{fontSize:12,color:C.muted}}>{draft.items.length} row{draft.items.length===1?"":"s"}</span>
       </div>
 
-      <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        {draft.items.map((it,idx)=>{
-          const c=itemCalc(it);
-          return(
-            <Card key={it.id} style={{padding:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                <span style={{width:24,height:24,borderRadius:6,background:C.tealBg,color:C.teal,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{idx+1}</span>
-                <input value={it.name} placeholder="Item (e.g. Tusker)" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,"name",e.target.value)}/>
-                <button onClick={()=>removeItem(it.id)} title="Remove" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:8,cursor:"pointer",display:"flex",flexShrink:0}}>
-                  <Ico d={IC.trash} size={15} color={C.red}/>
-                </button>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:10}}>
-                {[["Units bought","unitsBought"],["Cost per unit","costPerUnit"],["Pieces per unit","piecesPerUnit"],["Sell price / piece","pricePerPiece"]].map(([label,key])=>(
-                  <div key={key}><label style={lbl}>{label}</label>
-                    <input type="number" value={it[key]} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,key,e.target.value)}/></div>
+      {isMobile ? (
+        /* phones: stacked cards (a table is too wide for a small screen) */
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {draft.items.map((it,idx)=>{
+            const c=itemCalc(it);
+            return(
+              <Card key={it.id} style={{padding:16}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                  <span style={{width:24,height:24,borderRadius:6,background:C.tealBg,color:C.teal,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{idx+1}</span>
+                  <input value={it.name} placeholder="Item (e.g. Tusker)" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,"name",e.target.value)}/>
+                  <button onClick={()=>removeItem(it.id)} title="Remove" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:8,cursor:"pointer",display:"flex",flexShrink:0}}>
+                    <Ico d={IC.trash} size={15} color={C.red}/>
+                  </button>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  {[["Units bought","unitsBought"],["Cost per unit","costPerUnit"],["Pieces per unit","piecesPerUnit"],["Sell price / piece","pricePerPiece"]].map(([label,key])=>(
+                    <div key={key}><label style={lbl}>{label}</label>
+                      <input type="number" inputMode="decimal" value={it[key]} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,key,e.target.value)}/></div>
+                  ))}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:12}}>
+                  {[["Total cost",c.totalCost,C.text],["Total pieces",c.totalPieces,C.text],["Expected sales",c.expectedSales,C.blue],["Profit",c.profit,c.profit>=0?C.green:C.red]].map(([label,val,col])=>(
+                    <div key={label} style={{background:C.inputBg,borderRadius:8,padding:"8px 10px"}}>
+                      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>{label}</div>
+                      <div style={{fontSize:13,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums"}}>{fmt(val)}</div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        /* tablet & desktop: spreadsheet-style table */
+        <div style={{overflowX:"auto",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:880}}>
+            <thead>
+              <tr style={{background:C.inputBg}}>
+                {[["#",0],["Item",0],["Units",1],["Cost / unit",1],["Pieces / unit",1],["Price / piece",1],["Total cost",1],["Exp. sales",1],["Profit",1],["",0]].map(([h,r],i)=>(
+                  <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 12px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
                 ))}
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginTop:12}}>
-                {[["Total cost",c.totalCost,C.text],["Total pieces",c.totalPieces,C.text],["Expected sales",c.expectedSales,C.blue],["Profit",c.profit,c.profit>=0?C.green:C.red]].map(([label,val,col])=>(
-                  <div key={label} style={{background:C.inputBg,borderRadius:8,padding:"8px 10px"}}>
-                    <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>{label}</div>
-                    <div style={{fontSize:13,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums"}}>{fmt(val)}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+              </tr>
+            </thead>
+            <tbody>
+              {draft.items.map((it,idx)=>{
+                const c=itemCalc(it);
+                const tdN={padding:"5px 8px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
+                return(
+                  <tr key={it.id}>
+                    <td style={{padding:"5px 12px",borderBottom:`1px solid ${C.divider}`,color:C.muted,fontSize:12}}>{idx+1}</td>
+                    <td style={{padding:"5px 8px",borderBottom:`1px solid ${C.divider}`}}>
+                      <input value={it.name} placeholder="e.g. Tusker" style={{...cellINP,minWidth:130}} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,"name",e.target.value)}/>
+                    </td>
+                    {["unitsBought","costPerUnit","piecesPerUnit","pricePerPiece"].map(k=>(
+                      <td key={k} style={{padding:"5px 8px",borderBottom:`1px solid ${C.divider}`}}>
+                        <input type="number" inputMode="decimal" value={it[k]} placeholder="0" style={{...cellINP,textAlign:"right",minWidth:84}} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,k,e.target.value)}/>
+                      </td>
+                    ))}
+                    <td style={{...tdN,color:C.text}}>{fmt(c.totalCost)}</td>
+                    <td style={{...tdN,color:C.blue}}>{fmt(c.expectedSales)}</td>
+                    <td style={{...tdN,color:c.profit>=0?C.green:C.red}}>{fmt(c.profit)}</td>
+                    <td style={{padding:"5px 8px",borderBottom:`1px solid ${C.divider}`,textAlign:"center"}}>
+                      <button onClick={()=>removeItem(it.id)} title="Remove" style={{background:"transparent",border:"none",cursor:"pointer",padding:4,display:"flex"}}>
+                        <Ico d={IC.trash} size={15} color={C.red}/>
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{background:C.inputBg}}>
+                <td/>
+                <td style={{padding:"10px 8px",fontWeight:700,color:C.text,fontSize:12}}>Totals</td>
+                <td colSpan={4}/>
+                <td style={{padding:"10px 8px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmt(totals.spent)}</td>
+                <td style={{padding:"10px 8px",textAlign:"right",fontWeight:700,color:C.blue,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmt(totals.sales)}</td>
+                <td style={{padding:"10px 8px",textAlign:"right",fontWeight:700,color:totals.profitOnStock>=0?C.green:C.red,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmt(totals.profitOnStock)}</td>
+                <td/>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       <button onClick={addItem} style={{marginTop:12,width:"100%",background:C.tealBg,border:`1px dashed ${C.teal}66`,borderRadius:10,color:C.teal,padding:"12px",fontWeight:600,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
         <Ico d={IC.add} size={16} color={C.teal}/> Add another item
@@ -554,7 +609,8 @@ function BatchReport({batch}){
         <div style={{textAlign:"right"}}><div style={{fontSize:11,color:RP.soft}}>Available capital</div><div style={{fontWeight:800,fontSize:16,color:RP.teal}}>{money(t.capital)}</div></div>
       </div>
 
-      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
+      <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6,minWidth:520}}>
         <thead><Trow head cells={["#","Item","Units","Cost / unit","Total cost","Actual paid"]} right={[2,3,4,5]}/></thead>
         <tbody>
           {batch.items.map((it,i)=>{ const c=itemCalc(it);
@@ -563,8 +619,9 @@ function BatchReport({batch}){
           <Trow strong cells={["", "TOTAL STOCK COST", "", "", money(t.spent), ""]} right={[2,3,4,5]}/>
         </tbody>
       </table>
+      </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,marginTop:18}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:24,marginTop:18}}>
         <div>
           <div style={{fontSize:11,fontWeight:700,color:RP.soft,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Money at the market</div>
           {[["Stock cost",money(t.spent)],["Other expenses",money(t.expenses)],["Total to spend",money(t.toSpend)],["Available capital",money(t.capital)]].map(([k,v])=>(
@@ -603,7 +660,8 @@ function SummaryReport({batches}){
   return(
     <>
       <ReportHeader title="Stock Summary Report"/>
-      <table style={{width:"100%",borderCollapse:"collapse"}}>
+      <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",minWidth:520}}>
         <thead><Trow head cells={["Stock","Date","Spent","Expected sales","Take-home","Margin"]} right={[2,3,4,5]}/></thead>
         <tbody>
           {batches.map((b,i)=>{ const t=batchCalc(b);
@@ -612,6 +670,7 @@ function SummaryReport({batches}){
           <Trow strong cells={["TOTAL", `${batches.length} batches`, fmt(g.spent), fmt(g.sales), `${g.takeHome>=0?"+":""}${fmt(g.takeHome)}`, g.sales>0?`${(g.profit/g.sales*100).toFixed(1)}%`:"0.0%"]} right={[2,3,4,5]}/>
         </tbody>
       </table>
+      </div>
       <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:16,marginTop:22}}>
         {[["Money spent",money(g.spent)],["Expected sales",money(g.sales)],["Other expenses",money(g.expenses)],["Take-home profit",money(g.takeHome)]].map(([k,v])=>(
           <div key={k}><div style={{fontSize:11,color:RP.soft}}>{k}</div><div style={{fontWeight:800,fontSize:15}}>{v}</div></div>
