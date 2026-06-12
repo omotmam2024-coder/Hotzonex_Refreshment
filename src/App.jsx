@@ -325,7 +325,17 @@ function StockEntry({initial, onSaved, onCancel, onPrint}){
     try{
       const rows = isEdit ? await stockDb.patch(draft.id,payload) : await stockDb.insert(payload);
       onSaved(rows && rows[0] ? rows[0] : { ...payload, id:draft.id||uid() });
-    }catch(e){ console.error(e); setError("Could not save — check your connection and try again."); setBusy(false); }
+    }catch(e){
+      console.error(e);
+      const msg=String(e&&e.message||"");
+      let nice="Could not save — check your connection and try again.";
+      if(/capital/i.test(msg))                              nice='Database is missing the "capital" column. In Supabase run: alter table public.stock_batches add column if not exists capital numeric not null default 0;';
+      else if(/stock_batches/i.test(msg)&&/(exist|relation|schema cache)/i.test(msg)) nice="The stock_batches table isn't set up. Run schema.sql in your Supabase SQL editor.";
+      else if(/row-level security|policy/i.test(msg))       nice="Supabase blocked the save (row-level security). Run the policy section of schema.sql.";
+      else if(/jwt|expired|invalid.*key|401|apikey/i.test(msg)) nice="Supabase key problem. Check the anon key/URL in App.jsx.";
+      else if(msg)                                          nice="Could not save: "+msg.replace(/\s+/g," ").slice(0,180);
+      setError(nice); setBusy(false);
+    }
   }
 
   const lbl={fontSize:11,color:C.muted,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"};
