@@ -25,10 +25,16 @@ const H = {
   "Prefer":"return=representation",
 };
 async function sbFetch(path, opts={}) {
-  const res = await fetch(`${SUPA_URL}/rest/v1${path}`, { headers:H, ...opts });
-  if (!res.ok) throw new Error(await res.text());
-  const t = await res.text();
-  return t ? JSON.parse(t) : [];
+  let res;
+  try {
+    res = await fetch(`${SUPA_URL}/rest/v1${path}`, { headers:H, ...opts });
+  } catch (netErr) {
+    // fetch only rejects on a real network/DNS/CORS failure
+    throw new Error("Network error: could not reach the database. Check your internet connection.");
+  }
+  const body = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} — ${body || res.statusText || "request failed"}`);
+  return body ? JSON.parse(body) : [];
 }
 const enc = encodeURIComponent;
 
@@ -665,7 +671,13 @@ function LoginScreen({onLogin, isDark, setIsDark}){
       const rows=await auth.login(email.trim().toLowerCase(),password);
       if(!rows||rows.length===0){ setError("Invalid email or password. Please try again."); return; }
       saveSession(rows[0]); onLogin(rows[0]);
-    }catch(err){ setError("Connection error. Please check your internet and try again."); }
+    }catch(err){
+      const m=String(err&&err.message||"");
+      if(/app_users/i.test(m)&&/(exist|relation|schema cache)/i.test(m)) setError("Login table not found — run schema.sql in your Supabase SQL editor.");
+      else if(/Network error|Failed to fetch/i.test(m)) setError("Can't reach the database. Check your internet, or whether the Supabase project is paused in the dashboard.");
+      else if(/HTTP 401|HTTP 403|invalid.*key|apikey|jwt/i.test(m)) setError("Supabase key/URL problem — check SUPA_URL and SUPA_KEY at the top of App.jsx.");
+      else setError(m ? ("Login failed: "+m.replace(/\s+/g," ").slice(0,160)) : "Connection error. Please check your internet and try again.");
+    }
     finally{ setLoading(false); }
   }
 
@@ -744,7 +756,10 @@ function MainApp({user, onLogout, isDark, setIsDark}){
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const roleCfg=ROLES[user.role]||ROLES.viewer;
 
-  useEffect(()=>{ stockDb.fetchAll().then(setBatches).catch(e=>{ console.error(e); setBatches([]); setToast("Could not load stock"); }); },[]);
+  useEffect(()=>{ stockDb.fetchAll().then(setBatches).catch(e=>{ console.error(e); setBatches([]);
+    const m=String(e&&e.message||"");
+    setToast(/stock_batches/i.test(m)&&/(exist|relation|schema cache)/i.test(m) ? "stock_batches table missing — run schema.sql" : "Could not load stock: "+m.slice(0,80));
+  }); },[]);
   const flash=m=>{ setToast(m); setTimeout(()=>setToast(""),2400); };
 
   const navTo=id=>{ setView(id); if(id==="entry") setEditing(null); if(isMobile) setSidebarOpen(false); };
