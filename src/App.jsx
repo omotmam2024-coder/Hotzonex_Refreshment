@@ -860,45 +860,113 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
 
       {/* daily list */}
       <SLabel style={{marginBottom:12}}>Daily records</SLabel>
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":isTablet?"1fr 1fr":"repeat(3,1fr)",gap:14}}>
-        {dailies.map(d=>{
-          const t=dailyCalc(d);
-          const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
-          return(
-            <Card key={d.id} style={{padding:18}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                <div style={{minWidth:0}}>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>{niceDate(d.date)}{d.date===today&&<span style={{fontSize:10,marginLeft:6,padding:"1px 7px",borderRadius:20,background:C.tealBg,color:C.teal,fontWeight:600}}>Today</span>}</div>
-                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{(d.items||[]).length} item{(d.items||[]).length===1?"":"s"} · {fmt(t.qty)} sold{d.note?` · ${d.note}`:""}</div>
+      {isMobile ? (
+        /* phones: stacked cards (a table is too wide for a small screen) */
+        <div style={{display:"grid",gridTemplateColumns:"1fr",gap:14}}>
+          {dailies.map(d=>{
+            const t=dailyCalc(d);
+            const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
+            return(
+              <Card key={d.id} style={{padding:18}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:700,color:C.text}}>{niceDate(d.date)}{d.date===today&&<span style={{fontSize:10,marginLeft:6,padding:"1px 7px",borderRadius:20,background:C.tealBg,color:C.teal,fontWeight:600}}>Today</span>}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{(d.items||[]).length} item{(d.items||[]).length===1?"":"s"} · {fmt(t.qty)} sold{d.note?` · ${d.note}`:""}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    {canDo(user,"canEdit")&&(
+                      <button onClick={()=>onEdit(d)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                        <Ico d={IC.edit} size={14} color={C.teal}/>
+                      </button>
+                    )}
+                    {canDo(user,"canDelete")&&(
+                      <button onClick={()=>onDelete(d)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                        <Ico d={IC.trash} size={14} color={C.red}/>
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div style={{display:"flex",gap:6,flexShrink:0}}>
-                  {canDo(user,"canEdit")&&(
-                    <button onClick={()=>onEdit(d)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                      <Ico d={IC.edit} size={14} color={C.teal}/>
-                    </button>
-                  )}
-                  {canDo(user,"canDelete")&&(
-                    <button onClick={()=>onDelete(d)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                      <Ico d={IC.trash} size={14} color={C.red}/>
-                    </button>
-                  )}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
+                  <div><div style={{fontSize:10,color:C.muted}}>Money in</div><div style={{fontSize:14,fontWeight:600,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(t.revenue)}</div></div>
+                  <div><div style={{fontSize:10,color:C.muted}}>Best seller</div><div style={{fontSize:14,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{top?top.name:"—"}</div></div>
                 </div>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
-                <div><div style={{fontSize:10,color:C.muted}}>Money in</div><div style={{fontSize:14,fontWeight:600,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(t.revenue)}</div></div>
-                <div><div style={{fontSize:10,color:C.muted}}>Best seller</div><div style={{fontSize:14,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{top?top.name:"—"}</div></div>
-              </div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginTop:12,paddingTop:12,borderTop:`1px solid ${C.divider}`}}>
-                <div>
-                  <div style={{fontSize:10,color:C.muted}}>You make</div>
-                  <div style={{fontSize:18,fontWeight:700,color:t.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginTop:12,paddingTop:12,borderTop:`1px solid ${C.divider}`}}>
+                  <div>
+                    <div style={{fontSize:10,color:C.muted}}>You make</div>
+                    <div style={{fontSize:18,fontWeight:700,color:t.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</div>
+                  </div>
+                  <span style={{fontSize:11,padding:"2px 9px",borderRadius:20,fontWeight:600,background:C.tealBg,color:C.teal}}>{(t.margin*100).toFixed(0)}%</span>
                 </div>
-                <span style={{fontSize:11,padding:"2px 9px",borderRadius:20,fontWeight:600,background:C.tealBg,color:C.teal}}>{(t.margin*100).toFixed(0)}%</span>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        /* tablet & desktop: spreadsheet-style table */
+        <div style={{overflowX:"auto",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:720}}>
+            <thead>
+              <tr style={{background:C.inputBg}}>
+                {[["Date",0],["Items",1],["Sold",1],["Best seller",0],["Money in",1],["You make",1],["Margin",1],["",0]].map(([h,r],i)=>(
+                  <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 14px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {dailies.map(d=>{
+                const t=dailyCalc(d);
+                const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
+                const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
+                return(
+                  <tr key={d.id}>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,whiteSpace:"nowrap"}}>
+                      <span style={{fontWeight:700,color:C.text,fontSize:13}}>{niceDate(d.date)}</span>
+                      {d.date===today&&<span style={{fontSize:10,marginLeft:6,padding:"1px 7px",borderRadius:20,background:C.tealBg,color:C.teal,fontWeight:600}}>Today</span>}
+                      {d.note&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{d.note}</div>}
+                    </td>
+                    <td style={{...tdN,color:C.muted,fontWeight:400}}>{(d.items||[]).length}</td>
+                    <td style={{...tdN,color:C.text}}>{fmt(t.qty)}</td>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.text,fontSize:13,maxWidth:170,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{top?top.name:"—"}</td>
+                    <td style={{...tdN,color:C.blue}}>{fmt(t.revenue)}</td>
+                    <td style={{...tdN,color:t.takeHome>=0?C.green:C.red}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</td>
+                    <td style={{...tdN,color:C.teal}}>{(t.margin*100).toFixed(0)}%</td>
+                    <td style={{padding:"10px 10px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",whiteSpace:"nowrap"}}>
+                      <div style={{display:"inline-flex",gap:6}}>
+                        {canDo(user,"canEdit")&&(
+                          <button onClick={()=>onEdit(d)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                            <Ico d={IC.edit} size={14} color={C.teal}/>
+                          </button>
+                        )}
+                        {canDo(user,"canDelete")&&(
+                          <button onClick={()=>onDelete(d)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                            <Ico d={IC.trash} size={14} color={C.red}/>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              {(()=>{ const g=dailies.reduce((a,d)=>{ const t=dailyCalc(d); a.qty+=t.qty; a.revenue+=t.revenue; a.takeHome+=t.takeHome; return a; },{qty:0,revenue:0,takeHome:0});
+                const tf={padding:"11px 14px",textAlign:"right",fontWeight:700,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"};
+                return(
+                  <tr style={{background:C.inputBg}}>
+                    <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{dailies.length} day{dailies.length===1?"":"s"}</td>
+                    <td/>
+                    <td style={{...tf,color:C.text}}>{fmt(g.qty)}</td>
+                    <td/>
+                    <td style={{...tf,color:C.blue}}>{fmt(g.revenue)}</td>
+                    <td style={{...tf,color:g.takeHome>=0?C.green:C.red}}>{g.takeHome>=0?"+":""}{fmt(g.takeHome)}</td>
+                    <td colSpan={2}/>
+                  </tr>
+                );
+              })()}
+            </tfoot>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
