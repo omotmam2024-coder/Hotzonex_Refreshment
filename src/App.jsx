@@ -899,50 +899,8 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
 
       {/* daily list */}
       <SLabel style={{marginBottom:12}}>Daily records</SLabel>
-      {isMobile ? (
-        /* phones: stacked cards (a table is too wide for a small screen) */
-        <div style={{display:"grid",gridTemplateColumns:"1fr",gap:14}}>
-          {dailies.map(d=>{
-            const t=dailyCalc(d);
-            const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
-            return(
-              <Card key={d.id} style={{padding:18}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                  <div style={{minWidth:0}}>
-                    <div style={{fontSize:15,fontWeight:700,color:C.text}}>{niceDate(d.date)}{d.date===today&&<span style={{fontSize:10,marginLeft:6,padding:"1px 7px",borderRadius:20,background:C.tealBg,color:C.teal,fontWeight:600}}>Today</span>}</div>
-                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{(d.items||[]).length} item{(d.items||[]).length===1?"":"s"} · {fmt(t.qty)} sold{d.note?` · ${d.note}`:""}</div>
-                  </div>
-                  <div style={{display:"flex",gap:6,flexShrink:0}}>
-                    {canDo(user,"canEdit")&&(
-                      <button onClick={()=>onEdit(d)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                        <Ico d={IC.edit} size={14} color={C.teal}/>
-                      </button>
-                    )}
-                    {canDo(user,"canDelete")&&(
-                      <button onClick={()=>onDelete(d)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                        <Ico d={IC.trash} size={14} color={C.red}/>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
-                  <div><div style={{fontSize:10,color:C.muted}}>Money in</div><div style={{fontSize:14,fontWeight:600,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(t.revenue)}</div></div>
-                  <div><div style={{fontSize:10,color:C.muted}}>Best seller</div><div style={{fontSize:14,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{top?top.name:"—"}</div></div>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginTop:12,paddingTop:12,borderTop:`1px solid ${C.divider}`}}>
-                  <div>
-                    <div style={{fontSize:10,color:C.muted}}>You make</div>
-                    <div style={{fontSize:18,fontWeight:700,color:t.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</div>
-                  </div>
-                  <span style={{fontSize:11,padding:"2px 9px",borderRadius:20,fontWeight:600,background:C.tealBg,color:C.teal}}>{(t.margin*100).toFixed(0)}%</span>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      ) : (
-        /* tablet & desktop: spreadsheet-style table */
-        <div style={{overflowX:"auto",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
+      {/* spreadsheet-style table on every screen (scrolls sideways on small phones) */}
+      <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:720}}>
             <thead>
               <tr style={{background:C.inputBg}}>
@@ -1005,7 +963,6 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
             </tfoot>
           </table>
         </div>
-      )}
     </div>
   );
 }
