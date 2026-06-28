@@ -114,15 +114,20 @@ const dailyCalc = (d) => {
   const grossProfit=revenue-cost, expenses=nv(d.expenses);
   return { revenue, cost, qty, grossProfit, expenses, takeHome: grossProfit-expenses, margin: revenue>0 ? grossProfit/revenue : 0 };
 };
-// Known products derived from stock batches → powers the daily picker (remembers price & cost-per-piece)
+// Known products derived from stock batches → powers the daily picker (remembers price & cost-per-piece).
+// When a product appears in several batches, keep the prices from the most recent batch.
 function productsFromBatches(batches){
   const map=new Map();
-  (batches||[]).forEach(b=>(b.items||[]).forEach(it=>{
-    const name=(it.name||"").trim(); if(!name) return;
-    const pieces=nv(it.piecesPerUnit), costPiece=pieces>0 ? nv(it.costPerUnit)/pieces : 0;
-    map.set(name.toLowerCase(),{ name, sellPrice:nv(it.pricePerPiece), costPrice:Math.round(costPiece) });
-  }));
-  return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
+  (batches||[]).forEach(b=>{ const bdate=String(b.date||"");
+    (b.items||[]).forEach(it=>{
+      const name=(it.name||"").trim(); if(!name) return;
+      const key=name.toLowerCase(); const prev=map.get(key);
+      if(prev && String(prev._date)>=bdate) return;          // already have prices from a newer (or same) batch
+      const pieces=nv(it.piecesPerUnit), costPiece=pieces>0 ? nv(it.costPerUnit)/pieces : 0;
+      map.set(key,{ name, sellPrice:nv(it.pricePerPiece), costPrice:Math.round(costPiece), _date:bdate });
+    });
+  });
+  return [...map.values()].map(({_date,...p})=>p).sort((a,b)=>a.name.localeCompare(b.name));
 }
 
 // ── Credit book: roll the flat entry list up into one record per customer ───────
@@ -135,7 +140,7 @@ function customersFromEntries(entries){
     const c=map.get(key)||{name, phone:"", taken:0, paid:0, outstanding:0, lastDate:"", count:0};
     if(e.kind==="payment") c.paid+=nv(e.amount); else c.taken+=nv(e.amount);
     c.outstanding=c.taken-c.paid; c.count++;
-    if(e.phone) c.phone=e.phone;
+    if(e.phone && (!c.phone || String(e.date||"")>=String(c.phoneDate||""))){ c.phone=e.phone; c.phoneDate=e.date||""; }
     if(String(e.date||"")>String(c.lastDate||"")) c.lastDate=e.date||"";
     map.set(key,c);
   });
@@ -176,7 +181,6 @@ function Ico({d,size=18,color="currentColor"}){
 const IC = {
   dashboard:"M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z",
   add:"M12 5v14m-7-7h14",
-  list:"M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
   edit:"M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
   trash:"M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
   logout:"M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1",
@@ -190,7 +194,6 @@ const IC = {
   calendar:"M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z",
   trophy:"M8 21h8m-4-4v4m5-17h2a2 2 0 010 4 4 4 0 01-2 2M7 4H5a2 2 0 000 4 4 4 0 002 2m0-8h10v5a5 5 0 01-10 0V4z",
   people:"M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 100 8 4 4 0 000-8zm14 14v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
-  plus:"M12 5v14m-7-7h14",
 };
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
@@ -366,7 +369,7 @@ const toDraft = (b) => b
       items:(b.items||[]).map(it=>({ id:it.id||uid(), name:it.name,
         unitsBought:String(it.unitsBought??""), costPerUnit:String(it.costPerUnit??""),
         piecesPerUnit:String(it.piecesPerUnit??""), pricePerPiece:String(it.pricePerPiece??"") })) }
-  : { id:null, name:"", date:new Date().toISOString().slice(0,10), capital:"", expenses:"", items:[blankItem()] };
+  : { id:null, name:"", date:todayStr(), capital:"", expenses:"", items:[blankItem()] };
 // turn the in-progress form into a batch-shaped object (numbers) for printing
 const draftToBatch = (d) => ({
   name: d.name.trim() || d.date || "Stock plan", date: d.date || null,
@@ -792,7 +795,7 @@ function ReportsView({batches, onPrintBatch, onPrintSummary}){
 }
 
 // ── DAILY SALES DASHBOARD ─────────────────────────────────────────────────────
-const todayStr = () => new Date().toISOString().slice(0,10);
+const todayStr = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const niceDate = (s) => s ? new Date(s+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "No date";
 
 function DailySales({dailies, user, onEdit, onDelete, onNew}){
@@ -1144,7 +1147,7 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
         <div style={{fontSize:13,color:C.muted,marginTop:6,lineHeight:1.6}}>When a customer takes drinks on credit, record it here. You'll always know who owes you and how much.</div>
         {canDo(user,"canEdit")&&(
           <button onClick={()=>onGiveCredit()} style={{marginTop:18,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 20px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
-            <Ico d={IC.plus} size={16} color="#09111e"/> Give credit
+            <Ico d={IC.add} size={16} color="#09111e"/> Give credit
           </button>
         )}
       </div>
@@ -1155,7 +1158,7 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
     <div>
       {canDo(user,"canEdit")&&(
         <button onClick={()=>onGiveCredit()} style={{marginBottom:16,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 18px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
-          <Ico d={IC.plus} size={16} color="#09111e"/> Give credit
+          <Ico d={IC.add} size={16} color="#09111e"/> Give credit
         </button>
       )}
 
@@ -1286,7 +1289,7 @@ function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPay
         {canDo(user,"canEdit")&&(
           <div style={{display:"flex",gap:10,padding:isMobile?"12px 16px":"14px 22px",borderBottom:`1px solid ${C.divider}`}}>
             <button onClick={()=>onGiveCredit({customer:name,phone,kind:"credit"})} style={{flex:1,background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:8,color:C.teal,padding:"10px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
-              <Ico d={IC.plus} size={15} color={C.teal}/> Give credit
+              <Ico d={IC.add} size={15} color={C.teal}/> Give credit
             </button>
             <button onClick={()=>onRecordPayment({customer:name,phone,kind:"payment"})} style={{flex:1,background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.3)",borderRadius:8,color:C.green,padding:"10px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
               <Ico d={IC.check} size={15} color={C.green}/> Record payment
@@ -1774,7 +1777,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
             {NAV.map(item=>{ const active=view===item.id;
               return(
                 <button key={item.id} onClick={()=>navTo(item.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"11px 18px",
-                  background:active?C.tealBg:"transparent",borderLeft:`3px solid ${active?C.teal:"transparent"}`,border:"none",outline:"none",
+                  background:active?C.tealBg:"transparent",borderStyle:"solid",borderWidth:"0 0 0 3px",borderColor:active?C.teal:"transparent",outline:"none",
                   color:active?C.teal:C.muted,cursor:"pointer",fontSize:13,fontWeight:active?600:400,textAlign:"left"}}>
                   <Ico d={IC[item.icon]} size={16} color={active?C.teal:C.muted}/> {item.label}
                 </button>
