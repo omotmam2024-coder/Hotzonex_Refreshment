@@ -798,9 +798,137 @@ function ReportsView({batches, onPrintBatch, onPrintSummary}){
 const todayStr = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const niceDate = (s) => s ? new Date(s+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "No date";
 
+// ── Shared list controls: segmented filter tabs + status badge ─────────────────
+function SegTabs({tabs, value, onChange}){
+  const C=useTheme();
+  return(
+    <div style={{display:"inline-flex",background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:9,padding:3,gap:2,flexWrap:"wrap"}}>
+      {tabs.map(t=>{ const active=t.id===value; return(
+        <button key={t.id} onClick={()=>onChange(t.id)} style={{border:"none",background:active?C.teal:"transparent",color:active?"#09111e":C.muted,fontWeight:active?700:500,fontSize:12,padding:"6px 12px",borderRadius:7,cursor:"pointer",whiteSpace:"nowrap"}}>
+          {t.label}{t.count!=null?` · ${t.count}`:""}
+        </button>); })}
+    </div>
+  );
+}
+function StatusBadge({outstanding}){
+  const C=useTheme();
+  const s = outstanding>0.0001 ? {l:"Open",c:C.orange} : outstanding<-0.0001 ? {l:"Overpaid",c:C.blue} : {l:"Settled",c:C.green};
+  return <span style={{fontSize:10,fontWeight:700,padding:"2px 9px",borderRadius:20,background:`${s.c}22`,color:s.c,whiteSpace:"nowrap"}}>{s.l}</span>;
+}
+const custStatusKey = c => c.outstanding>0.0001 ? "open" : "settled";
+
+// ── OVERVIEW (professional dashboard / home) ───────────────────────────────────
+function Overview({batches, dailies, credits, user, onGoto, onGiveCredit, onOpenCustomer}){
+  const C=useTheme(); const TT=useTT(); const isMobile=useIsMobile(); const isTablet=useIsTablet();
+  const today=todayStr(); const ym=today.slice(0,7);
+
+  const creditByDay=new Map();
+  (credits||[]).forEach(e=>{ if(e.daily_id && e.kind!=="payment") creditByDay.set(e.daily_id,(creditByDay.get(e.daily_id)||0)+nv(e.amount)); });
+  const creditOf=d=>creditByDay.get(d.id)||0;
+  const sumRows=rows=>rows.reduce((a,d)=>{ const t=dailyCalc(d), cr=creditOf(d); a.sales+=t.revenue; a.profit+=t.takeHome; a.credit+=cr; a.cash+=t.revenue-cr; return a; },{sales:0,profit:0,credit:0,cash:0});
+  const todayT=sumRows((dailies||[]).filter(d=>d.date===today));
+  const monthT=sumRows((dailies||[]).filter(d=>String(d.date||"").startsWith(ym)));
+
+  const ctot=creditTotals(credits||[]);
+  const custs=customersFromEntries(credits||[]);
+  const topDebtors=custs.filter(c=>c.outstanding>0.0001).slice(0,5);
+  const stock=(batches||[]).reduce((a,b)=>{ const t=batchCalc(b); a.spent+=t.spent; a.profit+=t.profitOnStock; return a; },{spent:0,profit:0});
+
+  const lb=new Map();
+  (dailies||[]).forEach(d=>(d.items||[]).forEach(it=>{ const name=(it.name||"").trim(); if(!name) return; const c=saleItemCalc(it); const e=lb.get(name)||{name,qty:0,revenue:0}; e.qty+=c.qty; e.revenue+=c.revenue; lb.set(name,e); }));
+  const topItems=[...lb.values()].sort((a,b)=>b.revenue-a.revenue).slice(0,5);
+  const topRev=topItems.length?topItems[0].revenue:0;
+
+  const byDay=new Map();
+  (dailies||[]).forEach(d=>{ if(!d.date) return; const t=dailyCalc(d), cr=creditOf(d); const e=byDay.get(d.date)||{sales:0,cash:0}; e.sales+=t.revenue; e.cash+=t.revenue-cr; byDay.set(d.date,e); });
+  const chartData=[...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-14).map(([date,v])=>({ name:new Date(date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"}), Sales:v.sales, Cash:v.cash }));
+
+  const act={display:"inline-flex",alignItems:"center",gap:7,border:`1px solid ${C.cardB}`,background:C.card,color:C.text,borderRadius:8,padding:"9px 14px",fontSize:13,fontWeight:600,cursor:"pointer"};
+  const link={background:"transparent",border:"none",color:C.teal,fontSize:12,fontWeight:600,cursor:"pointer",padding:0};
+
+  return(
+    <div>
+      {/* quick actions */}
+      {canDo(user,"canEdit")&&(
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+          <button onClick={()=>onGoto("dailyEntry")} style={{...act,background:C.teal,border:"none",color:"#09111e"}}><Ico d={IC.add} size={16} color="#09111e"/> Record day</button>
+          <button onClick={()=>onGiveCredit()} style={act}><Ico d={IC.people} size={16} color={C.text}/> Give credit</button>
+          <button onClick={()=>onGoto("entry")} style={act}><Ico d={IC.wallet} size={16} color={C.text}/> Add stock</button>
+        </div>
+      )}
+
+      {/* headline KPIs */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:12}}>
+        <KPICard label="This Month · Sales"   value={monthT.sales} color={C.blue}/>
+        <KPICard label="This Month · Cash In" value={monthT.cash}  color={C.text}/>
+        <KPICard label="This Month · You Make" value={monthT.profit} color={monthT.profit>=0?C.green:C.red}/>
+        <KPICard label="Owed To You"          value={ctot.outstanding} color={ctot.outstanding>0?C.red:C.green}/>
+      </div>
+
+      {/* secondary strip */}
+      <Card style={{padding:isMobile?"12px 14px":"14px 22px",marginBottom:16,display:"flex",alignItems:"center",gap:isMobile?14:26,flexWrap:"wrap"}}>
+        {[["Today sales",fmt(todayT.sales),C.blue],["Today cash",fmt(todayT.cash),C.text],["Today on credit",fmt(todayT.credit),todayT.credit>0?C.orange:C.muted],
+          ["Customers owing",`${ctot.owing}`,C.orange],["Stock spent",fmt(stock.spent),C.text],["Expected stock profit",fmt(stock.profit),C.green]].map(([k,v,col])=>(
+          <div key={k}><div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:"0.08em"}}>{k}</div><div style={{fontSize:16,fontWeight:700,color:col,fontVariantNumeric:"tabular-nums"}}>{v}</div></div>
+        ))}
+      </Card>
+
+      {/* chart */}
+      <Card style={{padding:isMobile?16:22,marginBottom:16}}>
+        <SLabel style={{marginBottom:16}}>Sales vs. cash collected (per day)</SLabel>
+        {chartData.length===0
+          ? <div style={{padding:30,textAlign:"center",color:C.muted,fontSize:13}}>No daily sales yet. Tap “Record day” to start.</div>
+          : <ResponsiveContainer width="100%" height={isMobile?220:260}>
+              <BarChart data={chartData} margin={{top:4,right:4,left:-10,bottom:isMobile?28:8}} barGap={2}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.subtle} vertical={false}/>
+                <XAxis dataKey="name" tick={{fill:C.muted,fontSize:10}} axisLine={false} tickLine={false} angle={isMobile?-25:0} textAnchor={isMobile?"end":"middle"} interval={0} height={isMobile?44:24}/>
+                <YAxis tick={{fill:C.muted,fontSize:9}} axisLine={false} tickLine={false} width={40} tickFormatter={compact}/>
+                <Tooltip {...TT} cursor={{fill:C.tealBg}}/>
+                <Bar dataKey="Sales" fill={C.blue} radius={[3,3,0,0]} maxBarSize={26}/>
+                <Bar dataKey="Cash"  fill={C.teal} radius={[3,3,0,0]} maxBarSize={26}/>
+              </BarChart>
+            </ResponsiveContainer>}
+      </Card>
+
+      {/* two columns: top items + top debtors */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile||isTablet?"1fr":"1fr 1fr",gap:16}}>
+        <Card style={{padding:isMobile?16:22}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}><Ico d={IC.trophy} size={16} color={C.yellow}/><SLabel>Top items</SLabel></div>
+            <button onClick={()=>onGoto("daily")} style={link}>View sales →</button>
+          </div>
+          {topItems.length===0 ? <div style={{fontSize:12,color:C.muted}}>No sales yet.</div>
+            : topItems.map((it,i)=>(
+              <div key={it.name} style={{marginBottom:i===topItems.length-1?0:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:5}}>
+                  <span style={{fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{i+1}. {it.name}</span>
+                  <span style={{fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(it.revenue)}</span>
+                </div>
+                <div style={{height:6,borderRadius:4,background:C.subtle,overflow:"hidden"}}><div style={{height:"100%",borderRadius:4,width:`${topRev>0?Math.max(4,it.revenue/topRev*100):0}%`,background:C.teal}}/></div>
+              </div>))}
+        </Card>
+
+        <Card style={{padding:isMobile?16:22}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}><Ico d={IC.people} size={16} color={C.orange}/><SLabel>Who owes you</SLabel></div>
+            <button onClick={()=>onGoto("credit")} style={link}>Credit book →</button>
+          </div>
+          {topDebtors.length===0 ? <div style={{fontSize:12,color:C.muted}}>Nobody owes you right now. 🎉</div>
+            : topDebtors.map((c,i)=>(
+              <div key={c.name} onClick={()=>onOpenCustomer(c.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"9px 0",borderTop:i?`1px solid ${C.divider}`:"none",cursor:"pointer"}}>
+                <div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div><div style={{fontSize:10,color:C.muted}}>last {niceDate(c.lastDate)}</div></div>
+                <div style={{fontSize:14,fontWeight:700,color:C.red,fontVariantNumeric:"tabular-nums",flexShrink:0}}>{fmt(c.outstanding)}</div>
+              </div>))}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
   const C=useTheme(); const TT=useTT();
   const isMobile=useIsMobile(); const isTablet=useIsTablet();
+  const [period,setPeriod]=useState("all");   // all | month | today
 
   // credit given per day (sums the Credit Book entries linked to each day)
   const creditByDay=new Map();
@@ -917,8 +1045,15 @@ function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
       </div>
 
       {/* daily list */}
-      <SLabel style={{marginBottom:12}}>Daily records</SLabel>
-      {/* spreadsheet-style table on every screen (scrolls sideways on small phones) */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+        <SLabel>Daily records</SLabel>
+        <SegTabs tabs={[{id:"all",label:"All",count:dailies.length},{id:"month",label:"This month"},{id:"today",label:"Today"}]} value={period} onChange={setPeriod}/>
+      </div>
+      {(()=>{ const shownDays=dailies.filter(d=>period==="today"?d.date===today:period==="month"?String(d.date||"").startsWith(ym):true);
+      return shownDays.length===0
+        ? <Card style={{padding:30,textAlign:"center"}}><div style={{fontSize:13,color:C.muted}}>No sales recorded {period==="today"?"today":period==="month"?"this month":"yet"}.</div></Card>
+        : (
+      /* spreadsheet-style table on every screen (scrolls sideways on small phones) */
       <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:720}}>
             <thead>
@@ -929,7 +1064,7 @@ function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
               </tr>
             </thead>
             <tbody>
-              {dailies.map(d=>{
+              {shownDays.map(d=>{
                 const t=dailyCalc(d); const cr=creditOf(d); const cash=t.revenue-cr;
                 const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
                 const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
@@ -965,11 +1100,11 @@ function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
               })}
             </tbody>
             <tfoot>
-              {(()=>{ const g=dailies.reduce((a,d)=>{ const t=dailyCalc(d), cr=creditOf(d); a.qty+=t.qty; a.revenue+=t.revenue; a.takeHome+=t.takeHome; a.credit+=cr; a.cash+=t.revenue-cr; return a; },{qty:0,revenue:0,takeHome:0,credit:0,cash:0});
+              {(()=>{ const g=shownDays.reduce((a,d)=>{ const t=dailyCalc(d), cr=creditOf(d); a.qty+=t.qty; a.revenue+=t.revenue; a.takeHome+=t.takeHome; a.credit+=cr; a.cash+=t.revenue-cr; return a; },{qty:0,revenue:0,takeHome:0,credit:0,cash:0});
                 const tf={padding:"11px 14px",textAlign:"right",fontWeight:700,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"};
                 return(
                   <tr style={{background:C.inputBg}}>
-                    <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{dailies.length} day{dailies.length===1?"":"s"}</td>
+                    <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{shownDays.length} day{shownDays.length===1?"":"s"}</td>
                     <td style={{...tf,color:C.text}}>{fmt(g.qty)}</td>
                     <td/>
                     <td style={{...tf,color:C.blue}}>{fmt(g.revenue)}</td>
@@ -983,6 +1118,7 @@ function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
             </tfoot>
           </table>
         </div>
+      ); })()}
     </div>
   );
 }
@@ -1209,8 +1345,12 @@ function DailyEntry({initial, products, customers, linkedCredits, onSaved, onCan
 // ── CREDIT BOOK (customer debts) ──────────────────────────────────────────────
 function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer, onDeleteCustomer}){
   const C=useTheme(); const isMobile=useIsMobile();
+  const [filter,setFilter]=useState("all");   // all | open | settled
   const custs=customersFromEntries(entries);
   const tot=creditTotals(entries);
+  const openCount=custs.filter(c=>custStatusKey(c)==="open").length;
+  const shown=custs.filter(c=>filter==="all"?true:custStatusKey(c)===filter);
+  const filterTabs=[{id:"all",label:"All",count:custs.length},{id:"open",label:"Open",count:openCount},{id:"settled",label:"Settled",count:custs.length-openCount}];
 
   if(entries.length===0){
     return(
@@ -1245,10 +1385,15 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
         <KPICard label="Repaid"          value={tot.repaid} color={C.green}/>
       </div>
 
-      <SLabel style={{marginBottom:12}}>Customers</SLabel>
-      {isMobile ? (
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+        <SLabel>Customers</SLabel>
+        <SegTabs tabs={filterTabs} value={filter} onChange={setFilter}/>
+      </div>
+      {shown.length===0 ? (
+        <Card style={{padding:30,textAlign:"center"}}><div style={{fontSize:13,color:C.muted}}>No {filter==="open"?"open debts":filter==="settled"?"settled customers":"customers"} to show.</div></Card>
+      ) : isMobile ? (
         <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12}}>
-          {custs.map(c=>(
+          {shown.map(c=>(
             <Card key={c.name} style={{padding:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
                 <div style={{minWidth:0,cursor:"pointer"}} onClick={()=>onOpenCustomer(c.name)}>
@@ -1256,7 +1401,7 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
                   <div style={{fontSize:11,color:C.muted,marginTop:2}}>{c.phone?c.phone+" · ":""}{c.count} entr{c.count===1?"y":"ies"} · last {niceDate(c.lastDate)}</div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
-                  <div style={{fontSize:10,color:C.muted}}>Owes</div>
+                  <div style={{display:"flex",justifyContent:"flex-end",marginBottom:3}}><StatusBadge outstanding={c.outstanding}/></div>
                   <div style={{fontSize:18,fontWeight:700,color:c.outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(Math.max(0,c.outstanding))}</div>
                 </div>
               </div>
@@ -1286,18 +1431,19 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:680}}>
             <thead>
               <tr style={{background:C.inputBg}}>
-                {[["Customer",0],["Phone",0],["Taken",1],["Paid",1],["Outstanding",1],["Last",0],["",0]].map(([h,r],i)=>(
+                {[["Customer",0],["Phone",0],["Status",0],["Taken",1],["Paid",1],["Outstanding",1],["Last",0],["",0]].map(([h,r],i)=>(
                   <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 14px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {custs.map(c=>{
+              {shown.map(c=>{
                 const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
                 return(
                   <tr key={c.name} onClick={()=>onOpenCustomer(c.name)} style={{cursor:"pointer"}}>
                     <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,fontWeight:700,color:C.text,fontSize:13,whiteSpace:"nowrap"}}>{c.name}</td>
                     <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.muted,fontSize:13,whiteSpace:"nowrap"}}>{c.phone||"—"}</td>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,whiteSpace:"nowrap"}}><StatusBadge outstanding={c.outstanding}/></td>
                     <td style={{...tdN,color:C.text}}>{fmt(c.taken)}</td>
                     <td style={{...tdN,color:C.text}}>{fmt(c.paid)}</td>
                     <td style={{...tdN,color:c.outstanding>0?C.red:C.green}}>{fmt(Math.max(0,c.outstanding))}</td>
@@ -1322,14 +1468,18 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
               })}
             </tbody>
             <tfoot>
-              <tr style={{background:C.inputBg}}>
-                <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{custs.length} customer{custs.length===1?"":"s"}</td>
-                <td/>
-                <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(tot.given)}</td>
-                <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(tot.repaid)}</td>
-                <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:tot.outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(tot.outstanding)}</td>
-                <td colSpan={2}/>
-              </tr>
+              {(()=>{ const s=shown.reduce((a,c)=>{ a.taken+=c.taken; a.paid+=c.paid; a.out+=Math.max(0,c.outstanding); return a; },{taken:0,paid:0,out:0});
+                return(
+                  <tr style={{background:C.inputBg}}>
+                    <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{shown.length} customer{shown.length===1?"":"s"}</td>
+                    <td/><td/>
+                    <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(s.taken)}</td>
+                    <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(s.paid)}</td>
+                    <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:s.out>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(s.out)}</td>
+                    <td colSpan={2}/>
+                  </tr>
+                );
+              })()}
             </tfoot>
           </table>
         </div>
@@ -1697,7 +1847,7 @@ export default function App(){
 function MainApp({user, onLogout, isDark, setIsDark}){
   const C=isDark?DARK:LIGHT;
   const isMobile=useIsMobile();
-  const [view,setView]=useState("daily");          // daily | dailyEntry | credit | creditEntry | dashboard | entry | reports
+  const [view,setView]=useState("home");           // home | daily | dailyEntry | credit | creditEntry | dashboard | entry | reports
   const [editing,setEditing]=useState(null);        // stock batch being edited
   const [editingDaily,setEditingDaily]=useState(null);
   const [editingCredit,setEditingCredit]=useState(null);
@@ -1798,14 +1948,15 @@ function MainApp({user, onLogout, isDark, setIsDark}){
     }catch(e){ console.error(e); flash("Could not delete"); }
   }
 
-  const NAV=[{id:"daily",label:"Daily Sales",icon:"cash"}];
+  const NAV=[{id:"home",label:"Dashboard",icon:"dashboard"}];
+  NAV.push({id:"daily",label:"Daily Sales",icon:"cash"});
   if(canDo(user,"canEdit")) NAV.push({id:"dailyEntry",label:"Record Day",icon:"calendar"});
   NAV.push({id:"credit",label:"Credit Book",icon:"people"});
-  NAV.push({id:"dashboard",label:"Stock & Profit",icon:"dashboard"});
+  NAV.push({id:"dashboard",label:"Stock & Profit",icon:"wallet"});
   if(canDo(user,"canEdit")) NAV.push({id:"entry",label:"Add Stock",icon:"add"});
   NAV.push({id:"reports",label:"Reports",icon:"print"});
   const creditTitle=editingCredit?"Edit Entry":(creditPreset?.kind==="payment"?"Record Payment":"Give Credit");
-  const TITLES={daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",credit:"Credit Book",creditEntry:creditTitle,dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
+  const TITLES={home:"Business Overview",daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",credit:"Credit Book",creditEntry:creditTitle,dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
   const loading = batches===null || dailies===null || credits===null;
 
   return(
@@ -1884,6 +2035,8 @@ function MainApp({user, onLogout, isDark, setIsDark}){
           <ErrorBoundary theme={C}>
             {loading
               ? <Loading/>
+              : view==="home"
+                ? <Overview batches={batches} dailies={dailies} credits={credits} user={user} onGoto={navTo} onGiveCredit={giveCredit} onOpenCustomer={setOpenCustomer}/>
               : view==="daily"
                 ? <DailySales dailies={dailies} credits={credits} user={user} onEdit={startEditDaily} onDelete={d=>setToDelete({kind:"daily",row:d})} onNew={()=>navTo("dailyEntry")}/>
               : view==="dailyEntry"
