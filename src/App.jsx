@@ -586,10 +586,11 @@ function StockEntry({initial, onSaved, onCancel, onPrint}){
 function ConfirmDelete({target,onCancel,onConfirm}){
   const C=useTheme();
   const {kind,row}=target;
-  const titles={stock:"Delete this stock?",daily:"Delete this day's sales?",credit:"Delete this entry?"};
+  const titles={stock:"Delete this stock?",daily:"Delete this day's sales?",credit:"Delete this entry?",customer:"Remove this customer?"};
   let label, desc;
   if(kind==="daily"){ label=niceDate(row.date); const n=(row.items||[]).length; desc=<><strong style={{color:C.text}}>{label}</strong> and its {n} item{n===1?"":"s"} will be removed. This can't be undone.</>; }
   else if(kind==="credit"){ const isPay=row.kind==="payment"; label=`${isPay?"Payment":"Credit"} · ${row.customer}`; desc=<>This {isPay?"payment":"credit"} of <strong style={{color:C.text}}>SSP {fmt(row.amount)}</strong> for {row.customer} on {niceDate(row.date)} will be removed. This can't be undone.</>; }
+  else if(kind==="customer"){ label=row.name; desc=<>All <strong style={{color:C.text}}>{row.count}</strong> entr{row.count===1?"y":"ies"} for <strong style={{color:C.text}}>{row.name}</strong> will be removed{row.outstanding>0?<> (clearing the <strong style={{color:C.text}}>SSP {fmt(row.outstanding)}</strong> they owe)</>:""}. This can't be undone.</>; }
   else { label=row.name; const n=(row.items||[]).length; desc=<><strong style={{color:C.text}}>{label}</strong> and its {n} item{n===1?"":"s"} will be removed. This can't be undone.</>; }
   return(
     <div onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -1128,7 +1129,7 @@ function DailyEntry({initial, products, onSaved, onCancel}){
 }
 
 // ── CREDIT BOOK (customer debts) ──────────────────────────────────────────────
-function CreditBook({entries, user, onGiveCredit, onOpenCustomer}){
+function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer, onDeleteCustomer}){
   const C=useTheme(); const isMobile=useIsMobile();
   const custs=customersFromEntries(entries);
   const tot=creditTotals(entries);
@@ -1170,21 +1171,33 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer}){
       {isMobile ? (
         <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12}}>
           {custs.map(c=>(
-            <Card key={c.name} style={{padding:16,cursor:"pointer"}} >
-              <div onClick={()=>onOpenCustomer(c.name)}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                  <div style={{minWidth:0}}>
-                    <div style={{fontSize:15,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div>
-                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{c.phone?c.phone+" · ":""}{c.count} entr{c.count===1?"y":"ies"} · last {niceDate(c.lastDate)}</div>
-                  </div>
-                  <div style={{textAlign:"right",flexShrink:0}}>
-                    <div style={{fontSize:10,color:C.muted}}>Owes</div>
-                    <div style={{fontSize:18,fontWeight:700,color:c.outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(Math.max(0,c.outstanding))}</div>
-                  </div>
+            <Card key={c.name} style={{padding:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div style={{minWidth:0,cursor:"pointer"}} onClick={()=>onOpenCustomer(c.name)}>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{c.phone?c.phone+" · ":""}{c.count} entr{c.count===1?"y":"ies"} · last {niceDate(c.lastDate)}</div>
                 </div>
-                <div style={{display:"flex",gap:16,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.divider}`,fontSize:12,color:C.muted}}>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:10,color:C.muted}}>Owes</div>
+                  <div style={{fontSize:18,fontWeight:700,color:c.outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(Math.max(0,c.outstanding))}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,paddingTop:10,borderTop:`1px solid ${C.divider}`}}>
+                <div style={{display:"flex",gap:16,fontSize:12,color:C.muted}}>
                   <span>Taken <strong style={{color:C.text}}>{fmt(c.taken)}</strong></span>
                   <span>Paid <strong style={{color:C.text}}>{fmt(c.paid)}</strong></span>
+                </div>
+                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  {canDo(user,"canEdit")&&(
+                    <button onClick={()=>onEditCustomer(c)} title="Edit customer" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                      <Ico d={IC.edit} size={14} color={C.teal}/>
+                    </button>
+                  )}
+                  {canDo(user,"canDelete")&&(
+                    <button onClick={()=>onDeleteCustomer(c)} title="Delete customer" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                      <Ico d={IC.trash} size={14} color={C.red}/>
+                    </button>
+                  )}
                 </div>
               </div>
             </Card>
@@ -1211,7 +1224,21 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer}){
                     <td style={{...tdN,color:C.text}}>{fmt(c.paid)}</td>
                     <td style={{...tdN,color:c.outstanding>0?C.red:C.green}}>{fmt(Math.max(0,c.outstanding))}</td>
                     <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.muted,fontSize:12,whiteSpace:"nowrap"}}>{niceDate(c.lastDate)}</td>
-                    <td style={{padding:"10px 12px",borderBottom:`1px solid ${C.divider}`,textAlign:"right"}}><Ico d="M9 18l6-6-6-6" size={15} color={C.muted}/></td>
+                    <td style={{padding:"10px 10px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",whiteSpace:"nowrap"}}>
+                      <div style={{display:"inline-flex",gap:6,alignItems:"center"}}>
+                        {canDo(user,"canEdit")&&(
+                          <button onClick={e=>{e.stopPropagation();onEditCustomer(c);}} title="Edit customer" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                            <Ico d={IC.edit} size={14} color={C.teal}/>
+                          </button>
+                        )}
+                        {canDo(user,"canDelete")&&(
+                          <button onClick={e=>{e.stopPropagation();onDeleteCustomer(c);}} title="Delete customer" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                            <Ico d={IC.trash} size={14} color={C.red}/>
+                          </button>
+                        )}
+                        <Ico d="M9 18l6-6-6-6" size={15} color={C.muted}/>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -1304,6 +1331,39 @@ function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPay
 
         <div style={{padding:"12px 16px",borderTop:`1px solid ${C.cardB}`,textAlign:"right"}}>
           <button onClick={onClose} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 18px",fontSize:13,cursor:"pointer"}}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Edit a customer's name & phone across all their entries
+function EditCustomer({customer, onCancel, onSave}){
+  const C=useTheme();
+  const [name,setName]=useState(customer.name);
+  const [phone,setPhone]=useState(customer.phone||"");
+  const [busy,setBusy]=useState(false); const [error,setError]=useState("");
+  const focus=e=>e.target.style.borderColor=C.teal, blur=e=>e.target.style.borderColor=C.cardB;
+  const lbl={fontSize:11,color:C.muted,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"};
+  async function submit(){
+    if(!name.trim()){ setError("Name can't be empty."); return; }
+    setBusy(true); setError("");
+    try{ await onSave(name.trim(), phone.trim()); }
+    catch(e){ console.error(e); setError("Could not save the change. Try again."); setBusy(false); }
+  }
+  return(
+    <div onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:55,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.cardB}`,borderRadius:12,padding:24,maxWidth:400,width:"100%"}}>
+        <div style={{fontSize:16,fontWeight:700,color:C.text,marginBottom:4}}>Edit customer</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:16}}>Updates this customer's name & phone on all {customer.count} of their entries.</div>
+        <div style={{marginBottom:12}}><label style={lbl}>Name</label>
+          <input value={name} autoFocus style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>{setName(e.target.value);setError("");}}/></div>
+        <div><label style={lbl}>Phone (optional)</label>
+          <input value={phone} placeholder="09xx…" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setPhone(e.target.value)}/></div>
+        {error&&<div style={{marginTop:12,fontSize:12,color:C.red}}>{error}</div>}
+        <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:20}}>
+          <button onClick={onCancel} disabled={busy} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 16px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1}}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"9px 18px",fontWeight:700,fontSize:13,cursor:busy?"not-allowed":"pointer",opacity:busy?0.7:1}}>{busy?"Saving…":"Save"}</button>
         </div>
       </div>
     </div>
@@ -1565,6 +1625,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
   const [editingCredit,setEditingCredit]=useState(null);
   const [creditPreset,setCreditPreset]=useState(null);  // {customer,phone,kind} for a new entry
   const [openCustomer,setOpenCustomer]=useState(null);  // customer name → detail modal
+  const [editCustomer,setEditCustomer]=useState(null);  // customer obj → edit name/phone modal
   const [batches,setBatches]=useState(null);        // null = loading
   const [dailies,setDailies]=useState(null);        // null = loading
   const [credits,setCredits]=useState(null);        // null = loading
@@ -1621,12 +1682,28 @@ function MainApp({user, onLogout, isDark, setIsDark}){
     flash(editingCredit?"Entry updated":(row.kind==="payment"?"Payment recorded":"Credit recorded"));
     setView("credit"); setEditingCredit(null); setCreditPreset(null);
   };
+  const entryIdsFor=name=>(credits||[]).filter(e=>(e.customer||"").trim().toLowerCase()===name.trim().toLowerCase()).map(e=>e.id);
+  async function saveCustomer(oldName, newName, newPhone){
+    const ids=entryIdsFor(oldName); const phone=newPhone||null;
+    await Promise.all(ids.map(id=>creditDb.patch(id,{customer:newName, phone})));
+    setCredits(prev=>(prev||[]).map(e=>ids.includes(e.id)?{...e,customer:newName,phone}:e));
+    setEditCustomer(null);
+    if(openCustomer && openCustomer.trim().toLowerCase()===oldName.trim().toLowerCase()) setOpenCustomer(newName);
+    flash("Customer updated");
+  }
 
   async function confirmDelete(){
     const t=toDelete; setToDelete(null); if(!t) return;
     try{
       if(t.kind==="daily"){ await dailyDb.remove(t.row.id); setDailies(prev=>(prev||[]).filter(d=>d.id!==t.row.id)); flash("Day deleted"); }
       else if(t.kind==="credit"){ await creditDb.remove(t.row.id); setCredits(prev=>(prev||[]).filter(e=>e.id!==t.row.id)); flash("Entry deleted"); }
+      else if(t.kind==="customer"){
+        const ids=entryIdsFor(t.row.name);
+        await Promise.all(ids.map(id=>creditDb.remove(id)));
+        setCredits(prev=>(prev||[]).filter(e=>!ids.includes(e.id)));
+        if(openCustomer && openCustomer.trim().toLowerCase()===t.row.name.trim().toLowerCase()) setOpenCustomer(null);
+        flash("Customer removed");
+      }
       else { await stockDb.remove(t.row.id); setBatches(prev=>(prev||[]).filter(b=>b.id!==t.row.id)); flash("Stock deleted"); }
     }catch(e){ console.error(e); flash("Could not delete"); }
   }
@@ -1724,7 +1801,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
                   ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
                   : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record sales.</div>
               : view==="credit"
-                ? <CreditBook entries={credits} user={user} onGiveCredit={giveCredit} onOpenCustomer={setOpenCustomer}/>
+                ? <CreditBook entries={credits} user={user} onGiveCredit={giveCredit} onOpenCustomer={setOpenCustomer} onEditCustomer={setEditCustomer} onDeleteCustomer={c=>setToDelete({kind:"customer",row:c})}/>
               : view==="creditEntry"
                 ? canDo(user,"canEdit")
                   ? <CreditEntry key={editingCredit?editingCredit.id:"new-credit"} initial={editingCredit} preset={creditPreset} products={products} customers={customers} onSaved={onSavedCredit} onCancel={()=>{setView("credit");setEditingCredit(null);setCreditPreset(null);}}/>
@@ -1740,6 +1817,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
         </div>
       </div>
 
+      {editCustomer&&<EditCustomer customer={editCustomer} onCancel={()=>setEditCustomer(null)} onSave={(nm,ph)=>saveCustomer(editCustomer.name,nm,ph)}/>}
       {openCustomer&&<CustomerDetail name={openCustomer} entries={credits||[]} user={user}
         onClose={()=>setOpenCustomer(null)}
         onGiveCredit={p=>{setOpenCustomer(null);giveCredit(p);}}
