@@ -843,20 +843,10 @@ function Overview({batches, dailies, credits, user, onGoto, onGiveCredit, onOpen
   (dailies||[]).forEach(d=>{ if(!d.date) return; const t=dailyCalc(d), cr=creditOf(d); const e=byDay.get(d.date)||{sales:0,cash:0}; e.sales+=t.revenue; e.cash+=t.revenue-cr; byDay.set(d.date,e); });
   const chartData=[...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-14).map(([date,v])=>({ name:new Date(date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"}), Sales:v.sales, Cash:v.cash }));
 
-  const act={display:"inline-flex",alignItems:"center",gap:7,border:`1px solid ${C.cardB}`,background:C.card,color:C.text,borderRadius:8,padding:"9px 14px",fontSize:13,fontWeight:600,cursor:"pointer"};
   const link={background:"transparent",border:"none",color:C.teal,fontSize:12,fontWeight:600,cursor:"pointer",padding:0};
 
   return(
     <div>
-      {/* quick actions */}
-      {canDo(user,"canEdit")&&(
-        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
-          <button onClick={()=>onGoto("dailyEntry")} style={{...act,background:C.teal,border:"none",color:"#09111e"}}><Ico d={IC.add} size={16} color="#09111e"/> Record day</button>
-          <button onClick={()=>onGiveCredit()} style={act}><Ico d={IC.people} size={16} color={C.text}/> Give credit</button>
-          <button onClick={()=>onGoto("entry")} style={act}><Ico d={IC.wallet} size={16} color={C.text}/> Add stock</button>
-        </div>
-      )}
-
       {/* headline KPIs */}
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:12}}>
         <KPICard label="This Month · Sales"   value={monthT.sales} color={C.blue}/>
