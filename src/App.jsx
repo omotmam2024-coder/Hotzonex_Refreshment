@@ -798,14 +798,22 @@ function ReportsView({batches, onPrintBatch, onPrintSummary}){
 const todayStr = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const niceDate = (s) => s ? new Date(s+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "No date";
 
-function DailySales({dailies, user, onEdit, onDelete, onNew}){
+function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
   const C=useTheme(); const TT=useTT();
   const isMobile=useIsMobile(); const isTablet=useIsTablet();
 
+  // credit given per day (sums the Credit Book entries linked to each day)
+  const creditByDay=new Map();
+  (credits||[]).forEach(e=>{ if(e.daily_id && e.kind!=="payment") creditByDay.set(e.daily_id,(creditByDay.get(e.daily_id)||0)+nv(e.amount)); });
+  const creditOf=d=>creditByDay.get(d.id)||0;
+
   // Today + this-month totals
   const today=todayStr(); const ym=today.slice(0,7);
-  const todayT = dailies.filter(d=>d.date===today).reduce((a,d)=>{ const t=dailyCalc(d); a.revenue+=t.revenue; a.takeHome+=t.takeHome; a.qty+=t.qty; return a; },{revenue:0,takeHome:0,qty:0});
-  const monthT = dailies.filter(d=>String(d.date||"").startsWith(ym)).reduce((a,d)=>{ const t=dailyCalc(d); a.revenue+=t.revenue; a.takeHome+=t.takeHome; return a; },{revenue:0,takeHome:0});
+  const sumRows=rows=>rows.reduce((a,d)=>{ const t=dailyCalc(d), cr=creditOf(d);
+    a.revenue+=t.revenue; a.takeHome+=t.takeHome; a.qty+=t.qty; a.credit+=cr; a.cash+=t.revenue-cr; return a;
+  },{revenue:0,takeHome:0,qty:0,credit:0,cash:0});
+  const todayT = sumRows(dailies.filter(d=>d.date===today));
+  const monthT = sumRows(dailies.filter(d=>String(d.date||"").startsWith(ym)));
 
   // Leaderboard: aggregate each item across every day
   const lb=new Map();
@@ -850,13 +858,20 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
         </button>
       )}
 
-      {/* KPI row */}
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:16}}>
-        <KPICard label="Today · Money In"   value={todayT.revenue}  color={C.blue}/>
-        <KPICard label="Today · You Make"   value={todayT.takeHome} color={todayT.takeHome>=0?C.green:C.red}/>
-        <KPICard label="This Month · Money In" value={monthT.revenue}  color={C.teal}/>
-        <KPICard label="This Month · You Make" value={monthT.takeHome} color={monthT.takeHome>=0?C.green:C.red}/>
+      {/* KPI row — today's money flow */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:12}}>
+        <KPICard label="Today · Sales"     value={todayT.revenue} color={C.blue}/>
+        <KPICard label="Today · On Credit" value={todayT.credit}  color={todayT.credit>0?C.orange:C.muted}/>
+        <KPICard label="Today · Cash In"   value={todayT.cash}    color={C.text}/>
+        <KPICard label="Today · You Make"  value={todayT.takeHome} color={todayT.takeHome>=0?C.green:C.red}/>
       </div>
+      {/* this-month strip */}
+      <Card style={{padding:isMobile?"12px 14px":"12px 20px",marginBottom:16,display:"flex",alignItems:"center",gap:isMobile?14:28,flexWrap:"wrap"}}>
+        <span style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:600}}>This month</span>
+        {[["Sales",monthT.revenue,C.blue],["On credit",monthT.credit,C.orange],["Cash in",monthT.cash,C.text],["You make",monthT.takeHome,monthT.takeHome>=0?C.green:C.red]].map(([k,v,col])=>(
+          <div key={k}><div style={{fontSize:10,color:C.muted}}>{k}</div><div style={{fontSize:15,fontWeight:700,color:col,fontVariantNumeric:"tabular-nums"}}>{fmt(v)}</div></div>
+        ))}
+      </Card>
 
       <div style={{display:"grid",gridTemplateColumns:isMobile||isTablet?"1fr":"3fr 2fr",gap:16,marginBottom:16,alignItems:"start"}}>
         {/* chart */}
@@ -908,14 +923,14 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:720}}>
             <thead>
               <tr style={{background:C.inputBg}}>
-                {[["Date",0],["Items",1],["Sold",1],["Best seller",0],["Money in",1],["You make",1],["Margin",1],["",0]].map(([h,r],i)=>(
+                {[["Date",0],["Sold",1],["Best seller",0],["Sales",1],["On credit",1],["Cash",1],["You make",1],["",0]].map(([h,r],i)=>(
                   <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 14px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {dailies.map(d=>{
-                const t=dailyCalc(d);
+                const t=dailyCalc(d); const cr=creditOf(d); const cash=t.revenue-cr;
                 const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
                 const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
                 return(
@@ -925,12 +940,12 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
                       {d.date===today&&<span style={{fontSize:10,marginLeft:6,padding:"1px 7px",borderRadius:20,background:C.tealBg,color:C.teal,fontWeight:600}}>Today</span>}
                       {d.note&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{d.note}</div>}
                     </td>
-                    <td style={{...tdN,color:C.muted,fontWeight:400}}>{(d.items||[]).length}</td>
                     <td style={{...tdN,color:C.text}}>{fmt(t.qty)}</td>
-                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.text,fontSize:13,maxWidth:170,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{top?top.name:"—"}</td>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.text,fontSize:13,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{top?top.name:"—"}</td>
                     <td style={{...tdN,color:C.blue}}>{fmt(t.revenue)}</td>
+                    <td style={{...tdN,color:cr>0?C.orange:C.muted,fontWeight:cr>0?600:400}}>{cr>0?fmt(cr):"—"}</td>
+                    <td style={{...tdN,color:C.text}}>{fmt(cash)}</td>
                     <td style={{...tdN,color:t.takeHome>=0?C.green:C.red}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</td>
-                    <td style={{...tdN,color:C.teal}}>{(t.margin*100).toFixed(0)}%</td>
                     <td style={{padding:"10px 10px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",whiteSpace:"nowrap"}}>
                       <div style={{display:"inline-flex",gap:6}}>
                         {canDo(user,"canEdit")&&(
@@ -950,17 +965,18 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
               })}
             </tbody>
             <tfoot>
-              {(()=>{ const g=dailies.reduce((a,d)=>{ const t=dailyCalc(d); a.qty+=t.qty; a.revenue+=t.revenue; a.takeHome+=t.takeHome; return a; },{qty:0,revenue:0,takeHome:0});
+              {(()=>{ const g=dailies.reduce((a,d)=>{ const t=dailyCalc(d), cr=creditOf(d); a.qty+=t.qty; a.revenue+=t.revenue; a.takeHome+=t.takeHome; a.credit+=cr; a.cash+=t.revenue-cr; return a; },{qty:0,revenue:0,takeHome:0,credit:0,cash:0});
                 const tf={padding:"11px 14px",textAlign:"right",fontWeight:700,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"};
                 return(
                   <tr style={{background:C.inputBg}}>
                     <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{dailies.length} day{dailies.length===1?"":"s"}</td>
-                    <td/>
                     <td style={{...tf,color:C.text}}>{fmt(g.qty)}</td>
                     <td/>
                     <td style={{...tf,color:C.blue}}>{fmt(g.revenue)}</td>
+                    <td style={{...tf,color:g.credit>0?C.orange:C.muted}}>{fmt(g.credit)}</td>
+                    <td style={{...tf,color:C.text}}>{fmt(g.cash)}</td>
                     <td style={{...tf,color:g.takeHome>=0?C.green:C.red}}>{g.takeHome>=0?"+":""}{fmt(g.takeHome)}</td>
-                    <td colSpan={2}/>
+                    <td/>
                   </tr>
                 );
               })()}
@@ -973,15 +989,20 @@ function DailySales({dailies, user, onEdit, onDelete, onNew}){
 
 // ── DAILY SALES ENTRY ─────────────────────────────────────────────────────────
 const blankSale = () => ({ id:uid(), name:"", qtySold:"", sellPrice:"", costPrice:"" });
-const toDailyDraft = (d) => d
-  ? { id:d.id, date:d.date||"", note:d.note||"", expenses:String(d.expenses??""),
-      items:(d.items||[]).map(it=>({ id:it.id||uid(), name:it.name,
-        qtySold:String(it.qtySold??""), sellPrice:String(it.sellPrice??""), costPrice:String(it.costPrice??"") })) }
-  : { id:null, date:todayStr(), note:"", expenses:"", items:[blankSale()] };
+const blankCreditLine = () => ({ id:uid(), customer:"", amount:"" });
+const toDailyDraft = (d, linked) => {
+  const creditRows=(linked||[]).map(e=>({ id:e.id||uid(), customer:e.customer||"", amount:String(e.amount??"") }));
+  return d
+    ? { id:d.id, date:d.date||"", note:d.note||"", expenses:String(d.expenses??""),
+        items:(d.items||[]).map(it=>({ id:it.id||uid(), name:it.name,
+          qtySold:String(it.qtySold??""), sellPrice:String(it.sellPrice??""), costPrice:String(it.costPrice??"") })),
+        credits:creditRows }
+    : { id:null, date:todayStr(), note:"", expenses:"", items:[blankSale()], credits:[] };
+};
 
-function DailyEntry({initial, products, onSaved, onCancel}){
+function DailyEntry({initial, products, customers, linkedCredits, onSaved, onCancel}){
   const C=useTheme(); const isMobile=useIsMobile();
-  const [draft,setDraft]=useState(()=>toDailyDraft(initial));
+  const [draft,setDraft]=useState(()=>toDailyDraft(initial, linkedCredits));
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const isEdit=Boolean(initial);
   const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(p.name.toLowerCase(),p)); return m; },[products]);
@@ -1002,25 +1023,44 @@ function DailyEntry({initial, products, onSaved, onCancel}){
     if(it.id!==id) return it; const p=prodByName.get(name.trim().toLowerCase()); if(!p) return {...it,name};
     return {...it,name, sellPrice:it.sellPrice||String(p.sellPrice||"")};
   })}));
+  // on-credit lines (part of the bill a customer couldn't pay → goes to the Credit Book)
+  const setCredit=(id,k,v)=>setDraft(d=>({...d,credits:d.credits.map(c=>c.id===id?{...c,[k]:v}:c)}));
+  const addCredit=()=>setDraft(d=>({...d,credits:[...d.credits,blankCreditLine()]}));
+  const removeCredit=(id)=>setDraft(d=>({...d,credits:d.credits.filter(c=>c.id!==id)}));
 
   const totals=dailyCalc({...draft, items:draft.items.map(withCost)});
+  const creditTotal=draft.credits.reduce((s,c)=>s+(c.customer.trim()?nv(c.amount):0),0);
+  const cash=totals.revenue-creditTotal;
 
   async function save(){
     const items=draft.items.filter(it=>it.name.trim()!=="").map(it=>({
       id:it.id, name:it.name.trim(), qtySold:nv(it.qtySold), sellPrice:nv(it.sellPrice), costPrice:costFor(it) }));
+    const creditLines=draft.credits.filter(c=>c.customer.trim()!=="" && nv(c.amount)>0)
+      .map(c=>({ customer:c.customer.trim(), amount:nv(c.amount) }));
     if(!draft.date){ setError("Pick the date for these sales."); return; }
     if(items.length===0){ setError("Add at least one item that you sold."); return; }
     setError(""); setBusy(true);
     const payload={ date:draft.date, note:draft.note.trim()||null, expenses:nv(draft.expenses), items };
     try{
       const rows = isEdit ? await dailyDb.patch(draft.id,payload) : await dailyDb.insert(payload);
-      onSaved(rows && rows[0] ? rows[0] : { ...payload, id:draft.id||uid() });
+      const dayRow = rows && rows[0] ? rows[0] : { ...payload, id:draft.id||uid() };
+      // sync this day's on-credit lines into the Credit Book: drop the old linked ones, insert the new
+      const removedIds=(linkedCredits||[]).map(e=>e.id);
+      await Promise.all(removedIds.map(id=>creditDb.remove(id)));
+      let added=[];
+      if(creditLines.length){
+        const inserted=await Promise.all(creditLines.map(cl=>creditDb.insert({
+          customer:cl.customer, phone:null, date:dayRow.date||payload.date, kind:"credit",
+          amount:cl.amount, note:"From daily sales", items:[], daily_id:dayRow.id })));
+        added=inserted.map(r=>Array.isArray(r)?r[0]:r).filter(Boolean);
+      }
+      onSaved(dayRow, { removedIds, added });
     }catch(e){
       console.error(e);
       const msg=String(e&&e.message||"");
       let nice="Could not save — check your connection and try again.";
-      if(/daily_sales/i.test(msg)&&/(exist|relation|schema cache)/i.test(msg)) nice='The daily_sales table isn\'t set up yet. In Supabase create it (see daily_sales schema).';
-      else if(/row-level security|policy/i.test(msg)) nice="Supabase blocked the save (row-level security) — add an anon policy to daily_sales.";
+      if(/daily_sales|credit_entries/i.test(msg)&&/(exist|relation|schema cache|column)/i.test(msg)) nice="A database column is missing — run the latest schema in Supabase.";
+      else if(/row-level security|policy/i.test(msg)) nice="Supabase blocked the save (row-level security).";
       else if(msg) nice="Could not save: "+msg.replace(/\s+/g," ").slice(0,180);
       setError(nice); setBusy(false);
     }
@@ -1032,6 +1072,7 @@ function DailyEntry({initial, products, onSaved, onCancel}){
   return(
     <div style={{paddingBottom:90}}>
       <datalist id="hzx-products">{(products||[]).map(p=><option key={p.name} value={p.name}/>)}</datalist>
+      <datalist id="hzx-customers">{(customers||[]).map(c=><option key={c.name} value={c.name}/>)}</datalist>
       <button onClick={onCancel} style={{display:"inline-flex",alignItems:"center",gap:6,background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:13,marginBottom:14}}>
         <Ico d={IC.back} size={15} color={C.muted}/> Back to daily sales
       </button>
@@ -1104,6 +1145,39 @@ function DailyEntry({initial, products, onSaved, onCancel}){
         <Ico d={IC.add} size={16} color={C.teal}/> Add another item
       </button>
 
+      {/* given on credit — the part of today's bill a customer couldn't pay (goes to the Credit Book) */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"22px 0 12px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <Ico d={IC.people} size={15} color={C.orange}/><SLabel>Taken on credit (unpaid)</SLabel>
+        </div>
+        <span style={{fontSize:12,color:C.muted}}>owed today: <strong style={{color:creditTotal>0?C.orange:C.muted}}>{fmt(creditTotal)}</strong></span>
+      </div>
+      {draft.credits.length===0
+        ? <div style={{fontSize:12,color:C.muted,padding:"4px 2px 0",lineHeight:1.6}}>Everyone paid cash. If a customer drank but couldn't pay, add them below — it'll appear in the Credit Book as money they owe.</div>
+        : <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {draft.credits.map(c=>(
+              <Card key={c.id} style={{padding:12}}>
+                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr auto":"2fr 1fr auto",gap:10,alignItems:"end"}}>
+                  <div><label style={lbl}>Customer</label>
+                    <input value={c.customer} list="hzx-customers" placeholder="e.g. John Deng" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setCredit(c.id,"customer",e.target.value)}/></div>
+                  <div><label style={lbl}>On credit (SSP)</label>
+                    <input type="number" inputMode="decimal" value={c.amount} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setCredit(c.id,"amount",e.target.value)}/></div>
+                  <button onClick={()=>removeCredit(c.id)} title="Remove" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:10,cursor:"pointer",display:"flex",justifyContent:"center"}}>
+                    <Ico d={IC.trash} size={15} color={C.red}/>
+                  </button>
+                </div>
+              </Card>
+            ))}
+          </div>}
+      <button onClick={addCredit} style={{marginTop:10,width:"100%",background:"rgba(249,115,22,0.08)",border:`1px dashed ${C.orange}66`,borderRadius:10,color:C.orange,padding:"11px",fontWeight:600,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+        <Ico d={IC.add} size={16} color={C.orange}/> Put a customer on credit
+      </button>
+      {creditTotal>totals.revenue&&(
+        <div style={{marginTop:10,fontSize:11,color:C.orange,display:"flex",alignItems:"center",gap:6}}>
+          <Ico d={IC.alert} size={13} color={C.orange}/> Credit given is more than today's sales — double-check the amounts.
+        </div>
+      )}
+
       {error&&(
         <div style={{marginTop:14,padding:"10px 14px",background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:8,fontSize:12,color:C.red,display:"flex",alignItems:"center",gap:8}}>
           <Ico d={IC.alert} size={15} color={C.red}/> {error}
@@ -1114,13 +1188,14 @@ function DailyEntry({initial, products, onSaved, onCancel}){
       <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.header,borderTop:`1px solid ${C.cardB}`,zIndex:20}}>
         <div style={{maxWidth:1100,margin:"0 auto",padding:isMobile?"10px 14px":"12px 28px",display:"flex",alignItems:"center",gap:16}}>
           {!isMobile&&(
-            <div style={{display:"flex",gap:24,flex:1}}>
-              <div><div style={{fontSize:10,color:C.muted}}>Money in</div><div style={{fontSize:15,fontWeight:700,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(totals.revenue)}</div></div>
-              <div><div style={{fontSize:10,color:C.muted}}>Items sold</div><div style={{fontSize:15,fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(totals.qty)}</div></div>
+            <div style={{display:"flex",gap:22,flex:1}}>
+              <div><div style={{fontSize:10,color:C.muted}}>Sales</div><div style={{fontSize:15,fontWeight:700,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(totals.revenue)}</div></div>
+              <div><div style={{fontSize:10,color:C.muted}}>On credit</div><div style={{fontSize:15,fontWeight:700,color:creditTotal>0?C.orange:C.muted,fontVariantNumeric:"tabular-nums"}}>{fmt(creditTotal)}</div></div>
+              <div><div style={{fontSize:10,color:C.muted}}>Cash in</div><div style={{fontSize:15,fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(cash)}</div></div>
               <div><div style={{fontSize:10,color:C.muted}}>You make</div><div style={{fontSize:15,fontWeight:700,color:totals.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)}</div></div>
             </div>
           )}
-          {isMobile&&<div style={{flex:1}}><div style={{fontSize:10,color:C.muted}}>You make</div><div style={{fontSize:16,fontWeight:700,color:totals.takeHome>=0?C.green:C.red}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)} SSP</div></div>}
+          {isMobile&&<div style={{flex:1}}><div style={{fontSize:10,color:C.muted}}>Cash in · You make</div><div style={{fontSize:15,fontWeight:700,color:C.text}}>{fmt(cash)} · <span style={{color:totals.takeHome>=0?C.green:C.red}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)}</span></div></div>}
           <button onClick={onCancel} disabled={busy} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"10px 16px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1}}>Cancel</button>
           <button onClick={save} disabled={busy} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"10px 20px",fontWeight:700,fontSize:13,cursor:busy?"not-allowed":"pointer",opacity:busy?0.7:1,display:"flex",alignItems:"center",gap:8}}>
             <Ico d={IC.check} size={16} color="#09111e"/> {busy?"Saving…":isEdit?"Save changes":"Save day"}
@@ -1668,10 +1743,15 @@ function MainApp({user, onLogout, isDark, setIsDark}){
 
   // ── daily sales ──
   const startEditDaily=d=>{ setEditingDaily(d); setView("dailyEntry"); };
-  const onSavedDaily=row=>{
+  const onSavedDaily=(row, creditDelta)=>{
     setDailies(prev=>{ const list=prev||[]; const exists=list.some(d=>d.id===row.id);
       const next=exists?list.map(d=>d.id===row.id?row:d):[row,...list];
       return [...next].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))); });
+    if(creditDelta){
+      const removed=new Set(creditDelta.removedIds||[]);
+      setCredits(prev=>{ const kept=(prev||[]).filter(e=>!removed.has(e.id));
+        return [...(creditDelta.added||[]), ...kept].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))); });
+    }
     flash(editingDaily?"Day updated":"Sales saved"); setView("daily"); setEditingDaily(null);
   };
 
@@ -1698,7 +1778,14 @@ function MainApp({user, onLogout, isDark, setIsDark}){
   async function confirmDelete(){
     const t=toDelete; setToDelete(null); if(!t) return;
     try{
-      if(t.kind==="daily"){ await dailyDb.remove(t.row.id); setDailies(prev=>(prev||[]).filter(d=>d.id!==t.row.id)); flash("Day deleted"); }
+      if(t.kind==="daily"){
+        await dailyDb.remove(t.row.id);
+        const linkedIds=(credits||[]).filter(e=>e.daily_id===t.row.id).map(e=>e.id);  // credit lines that came from this day
+        await Promise.all(linkedIds.map(id=>creditDb.remove(id)));
+        setDailies(prev=>(prev||[]).filter(d=>d.id!==t.row.id));
+        if(linkedIds.length) setCredits(prev=>(prev||[]).filter(e=>!linkedIds.includes(e.id)));
+        flash("Day deleted");
+      }
       else if(t.kind==="credit"){ await creditDb.remove(t.row.id); setCredits(prev=>(prev||[]).filter(e=>e.id!==t.row.id)); flash("Entry deleted"); }
       else if(t.kind==="customer"){
         const ids=entryIdsFor(t.row.name);
@@ -1798,10 +1885,10 @@ function MainApp({user, onLogout, isDark, setIsDark}){
             {loading
               ? <Loading/>
               : view==="daily"
-                ? <DailySales dailies={dailies} user={user} onEdit={startEditDaily} onDelete={d=>setToDelete({kind:"daily",row:d})} onNew={()=>navTo("dailyEntry")}/>
+                ? <DailySales dailies={dailies} credits={credits} user={user} onEdit={startEditDaily} onDelete={d=>setToDelete({kind:"daily",row:d})} onNew={()=>navTo("dailyEntry")}/>
               : view==="dailyEntry"
                 ? canDo(user,"canEdit")
-                  ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
+                  ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} customers={customers} linkedCredits={editingDaily?(credits||[]).filter(e=>e.daily_id===editingDaily.id && e.kind!=="payment"):[]} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
                   : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record sales.</div>
               : view==="credit"
                 ? <CreditBook entries={credits} user={user} onGiveCredit={giveCredit} onOpenCustomer={setOpenCustomer} onEditCustomer={setEditCustomer} onDeleteCustomer={c=>setToDelete({kind:"customer",row:c})}/>
