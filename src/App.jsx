@@ -71,6 +71,14 @@ const dailyDb = {
   remove:   (id)    => sbFetch(`/daily_sales?id=eq.${id}`,{method:"DELETE",headers:{...H,Prefer:""}}),
 };
 
+// ── credit_entries CRUD (customer debt book: kind 'credit' given / 'payment' back)
+const creditDb = {
+  fetchAll: ()      => sbFetch(`/credit_entries?order=date.desc,created_at.desc`),
+  insert:   (f)     => sbFetch(`/credit_entries`,{method:"POST",body:JSON.stringify(f)}),
+  patch:    (id,f)  => sbFetch(`/credit_entries?id=eq.${id}`,{method:"PATCH",body:JSON.stringify(f)}),
+  remove:   (id)    => sbFetch(`/credit_entries?id=eq.${id}`,{method:"DELETE",headers:{...H,Prefer:""}}),
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const nv  = v => Number(v) || 0;
 const fmt = v => nv(v).toLocaleString();
@@ -117,6 +125,32 @@ function productsFromBatches(batches){
   return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }
 
+// ── Credit book: roll the flat entry list up into one record per customer ───────
+const creditSigned = (e) => (e.kind==="payment" ? -1 : 1) * nv(e.amount);  // +taken, -paid
+function customersFromEntries(entries){
+  const map=new Map();
+  (entries||[]).forEach(e=>{
+    const name=(e.customer||"").trim(); if(!name) return;
+    const key=name.toLowerCase();
+    const c=map.get(key)||{name, phone:"", taken:0, paid:0, outstanding:0, lastDate:"", count:0};
+    if(e.kind==="payment") c.paid+=nv(e.amount); else c.taken+=nv(e.amount);
+    c.outstanding=c.taken-c.paid; c.count++;
+    if(e.phone) c.phone=e.phone;
+    if(String(e.date||"")>String(c.lastDate||"")) c.lastDate=e.date||"";
+    map.set(key,c);
+  });
+  return [...map.values()].sort((a,b)=>b.outstanding-a.outstanding || a.name.localeCompare(b.name));
+}
+const creditTotals = (entries) => {
+  const custs=customersFromEntries(entries);
+  return {
+    given: custs.reduce((s,c)=>s+c.taken,0),
+    repaid: custs.reduce((s,c)=>s+c.paid,0),
+    outstanding: custs.reduce((s,c)=>s+Math.max(0,c.outstanding),0),
+    owing: custs.filter(c=>c.outstanding>0.0001).length,
+  };
+};
+
 // ── Palette ───────────────────────────────────────────────────────────────────
 const DARK = {
   pageBg:"#0b1120", sidebar:"#0d1526", header:"#0d1526",
@@ -155,6 +189,8 @@ const IC = {
   cash:"M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6",
   calendar:"M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z",
   trophy:"M8 21h8m-4-4v4m5-17h2a2 2 0 010 4 4 4 0 01-2 2M7 4H5a2 2 0 000 4 4 4 0 002 2m0-8h10v5a5 5 0 01-10 0V4z",
+  people:"M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 100 8 4 4 0 000-8zm14 14v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
+  plus:"M12 5v14m-7-7h14",
 };
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
@@ -549,15 +585,18 @@ function StockEntry({initial, onSaved, onCancel, onPrint}){
 // ── Confirm delete ────────────────────────────────────────────────────────────
 function ConfirmDelete({target,onCancel,onConfirm}){
   const C=useTheme();
-  const isDaily=target.kind==="daily"; const row=target.row;
-  const label=isDaily?niceDate(row.date):row.name;
-  const count=(row.items||[]).length;
+  const {kind,row}=target;
+  const titles={stock:"Delete this stock?",daily:"Delete this day's sales?",credit:"Delete this entry?"};
+  let label, desc;
+  if(kind==="daily"){ label=niceDate(row.date); const n=(row.items||[]).length; desc=<><strong style={{color:C.text}}>{label}</strong> and its {n} item{n===1?"":"s"} will be removed. This can't be undone.</>; }
+  else if(kind==="credit"){ const isPay=row.kind==="payment"; label=`${isPay?"Payment":"Credit"} · ${row.customer}`; desc=<>This {isPay?"payment":"credit"} of <strong style={{color:C.text}}>SSP {fmt(row.amount)}</strong> for {row.customer} on {niceDate(row.date)} will be removed. This can't be undone.</>; }
+  else { label=row.name; const n=(row.items||[]).length; desc=<><strong style={{color:C.text}}>{label}</strong> and its {n} item{n===1?"":"s"} will be removed. This can't be undone.</>; }
   return(
     <div onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.cardB}`,borderRadius:12,padding:24,maxWidth:380,width:"100%"}}>
-        <div style={{fontSize:16,fontWeight:700,color:C.text}}>{isDaily?"Delete this day's sales?":"Delete this stock?"}</div>
+        <div style={{fontSize:16,fontWeight:700,color:C.text}}>{titles[kind]||"Delete this?"}</div>
         <div style={{fontSize:13,color:C.muted,marginTop:8,lineHeight:1.6}}>
-          <strong style={{color:C.text}}>{label}</strong> and its {count} item{count===1?"":"s"} will be removed. This can't be undone.
+          {desc}
         </div>
         <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:20}}>
           <button onClick={onCancel} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 16px",fontSize:13,cursor:"pointer"}}>Keep it</button>
@@ -1131,6 +1170,347 @@ function DailyEntry({initial, products, onSaved, onCancel}){
   );
 }
 
+// ── CREDIT BOOK (customer debts) ──────────────────────────────────────────────
+function CreditBook({entries, user, onGiveCredit, onOpenCustomer}){
+  const C=useTheme(); const isMobile=useIsMobile();
+  const custs=customersFromEntries(entries);
+  const tot=creditTotals(entries);
+
+  if(entries.length===0){
+    return(
+      <div style={{textAlign:"center",maxWidth:440,margin:"60px auto",padding:"0 20px"}}>
+        <div style={{width:60,height:60,borderRadius:16,background:C.tealBg,border:`1px solid ${C.teal}44`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 18px"}}>
+          <Ico d={IC.people} size={26} color={C.teal}/>
+        </div>
+        <div style={{fontSize:18,fontWeight:700,color:C.text}}>No customer credit yet</div>
+        <div style={{fontSize:13,color:C.muted,marginTop:6,lineHeight:1.6}}>When a customer takes drinks on credit, record it here. You'll always know who owes you and how much.</div>
+        {canDo(user,"canEdit")&&(
+          <button onClick={()=>onGiveCredit()} style={{marginTop:18,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 20px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
+            <Ico d={IC.plus} size={16} color="#09111e"/> Give credit
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      {canDo(user,"canEdit")&&(
+        <button onClick={()=>onGiveCredit()} style={{marginBottom:16,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 18px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
+          <Ico d={IC.plus} size={16} color="#09111e"/> Give credit
+        </button>
+      )}
+
+      {/* KPI row */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:16}}>
+        <KPICard label="Owed To You"     value={tot.outstanding} color={tot.outstanding>0?C.red:C.green}/>
+        <KPICard label="Customers Owing" value={tot.owing} suffix="people" color={C.orange}/>
+        <KPICard label="Credit Given"    value={tot.given}  color={C.blue}/>
+        <KPICard label="Repaid"          value={tot.repaid} color={C.green}/>
+      </div>
+
+      <SLabel style={{marginBottom:12}}>Customers</SLabel>
+      {isMobile ? (
+        <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12}}>
+          {custs.map(c=>(
+            <Card key={c.name} style={{padding:16,cursor:"pointer"}} >
+              <div onClick={()=>onOpenCustomer(c.name)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{c.phone?c.phone+" · ":""}{c.count} entr{c.count===1?"y":"ies"} · last {niceDate(c.lastDate)}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:10,color:C.muted}}>Owes</div>
+                    <div style={{fontSize:18,fontWeight:700,color:c.outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(Math.max(0,c.outstanding))}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:16,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.divider}`,fontSize:12,color:C.muted}}>
+                  <span>Taken <strong style={{color:C.text}}>{fmt(c.taken)}</strong></span>
+                  <span>Paid <strong style={{color:C.text}}>{fmt(c.paid)}</strong></span>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <div style={{overflowX:"auto",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:680}}>
+            <thead>
+              <tr style={{background:C.inputBg}}>
+                {[["Customer",0],["Phone",0],["Taken",1],["Paid",1],["Outstanding",1],["Last",0],["",0]].map(([h,r],i)=>(
+                  <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 14px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {custs.map(c=>{
+                const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
+                return(
+                  <tr key={c.name} onClick={()=>onOpenCustomer(c.name)} style={{cursor:"pointer"}}>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,fontWeight:700,color:C.text,fontSize:13,whiteSpace:"nowrap"}}>{c.name}</td>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.muted,fontSize:13,whiteSpace:"nowrap"}}>{c.phone||"—"}</td>
+                    <td style={{...tdN,color:C.text}}>{fmt(c.taken)}</td>
+                    <td style={{...tdN,color:C.text}}>{fmt(c.paid)}</td>
+                    <td style={{...tdN,color:c.outstanding>0?C.red:C.green}}>{fmt(Math.max(0,c.outstanding))}</td>
+                    <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.muted,fontSize:12,whiteSpace:"nowrap"}}>{niceDate(c.lastDate)}</td>
+                    <td style={{padding:"10px 12px",borderBottom:`1px solid ${C.divider}`,textAlign:"right"}}><Ico d="M9 18l6-6-6-6" size={15} color={C.muted}/></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{background:C.inputBg}}>
+                <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{custs.length} customer{custs.length===1?"":"s"}</td>
+                <td/>
+                <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(tot.given)}</td>
+                <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(tot.repaid)}</td>
+                <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700,color:tot.outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(tot.outstanding)}</td>
+                <td colSpan={2}/>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Customer ledger — a modal showing one customer's credit/payment history + running balance
+function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPayment, onEdit, onDelete}){
+  const C=useTheme(); const isMobile=useIsMobile();
+  const mine=(entries||[]).filter(e=>(e.customer||"").trim().toLowerCase()===name.toLowerCase())
+    .slice().sort((a,b)=> String(a.date||"").localeCompare(String(b.date||"")) || String(a.created_at||"").localeCompare(String(b.created_at||"")));
+  const phone=mine.map(e=>e.phone).filter(Boolean).pop()||"";
+  let bal=0; const rows=mine.map(e=>{ bal+=creditSigned(e); return {e, bal}; }).reverse();
+  const outstanding=bal;
+
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:isMobile?12:24,overflowY:"auto"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.cardB}`,borderRadius:14,width:"100%",maxWidth:520,margin:"24px 0"}}>
+        <div style={{padding:isMobile?"16px 16px":"20px 22px",borderBottom:`1px solid ${C.cardB}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:18,fontWeight:800,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name}</div>
+            {phone&&<div style={{fontSize:12,color:C.muted,marginTop:2}}>{phone}</div>}
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:"0.08em"}}>Outstanding</div>
+            <div style={{fontSize:22,fontWeight:800,color:outstanding>0?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{fmt(Math.max(0,outstanding))}</div>
+          </div>
+        </div>
+
+        {canDo(user,"canEdit")&&(
+          <div style={{display:"flex",gap:10,padding:isMobile?"12px 16px":"14px 22px",borderBottom:`1px solid ${C.divider}`}}>
+            <button onClick={()=>onGiveCredit({customer:name,phone,kind:"credit"})} style={{flex:1,background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:8,color:C.teal,padding:"10px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
+              <Ico d={IC.plus} size={15} color={C.teal}/> Give credit
+            </button>
+            <button onClick={()=>onRecordPayment({customer:name,phone,kind:"payment"})} style={{flex:1,background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.3)",borderRadius:8,color:C.green,padding:"10px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
+              <Ico d={IC.check} size={15} color={C.green}/> Record payment
+            </button>
+          </div>
+        )}
+
+        <div style={{padding:isMobile?"8px 12px 12px":"10px 16px 16px",maxHeight:"50vh",overflowY:"auto"}}>
+          {rows.map(({e,bal})=>{
+            const isPay=e.kind==="payment";
+            return(
+              <div key={e.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 6px",borderBottom:`1px solid ${C.divider}`}}>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:10,fontWeight:700,padding:"1px 8px",borderRadius:20,background:isPay?"rgba(16,185,129,0.12)":"rgba(240,82,82,0.12)",color:isPay?C.green:C.red}}>{isPay?"PAID":"CREDIT"}</span>
+                    <span style={{fontSize:12,color:C.muted}}>{niceDate(e.date)}</span>
+                  </div>
+                  {(e.note||(e.items||[]).length>0)&&(
+                    <div style={{fontSize:11,color:C.muted,marginTop:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {(e.items||[]).length>0 ? (e.items||[]).map(it=>`${fmt(it.qty)}× ${it.name}`).join(", ") : e.note}
+                    </div>
+                  )}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:14,fontWeight:700,color:isPay?C.green:C.text,fontVariantNumeric:"tabular-nums"}}>{isPay?"−":"+"}{fmt(e.amount)}</div>
+                  <div style={{fontSize:10,color:C.muted}}>bal {fmt(bal)}</div>
+                </div>
+                {canDo(user,"canEdit")&&(
+                  <button onClick={()=>onEdit(e)} title="Edit" style={{background:"transparent",border:"none",cursor:"pointer",padding:4,display:"flex",flexShrink:0}}>
+                    <Ico d={IC.edit} size={14} color={C.muted}/>
+                  </button>
+                )}
+                {canDo(user,"canDelete")&&(
+                  <button onClick={()=>onDelete(e)} title="Delete" style={{background:"transparent",border:"none",cursor:"pointer",padding:4,display:"flex",flexShrink:0}}>
+                    <Ico d={IC.trash} size={14} color={C.red}/>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${C.cardB}`,textAlign:"right"}}>
+          <button onClick={onClose} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 18px",fontSize:13,cursor:"pointer"}}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CREDIT / PAYMENT ENTRY ────────────────────────────────────────────────────
+const blankCreditItem = () => ({ id:uid(), name:"", qty:"", price:"" });
+const toCreditDraft = (e, preset) => e
+  ? { id:e.id, customer:e.customer||"", phone:e.phone||"", date:e.date||"", kind:e.kind||"credit",
+      amount:String(e.amount??""), note:e.note||"",
+      items:(e.items||[]).map(it=>({ id:it.id||uid(), name:it.name||"", qty:String(it.qty??""), price:String(it.price??"") })) }
+  : { id:null, customer:preset?.customer||"", phone:preset?.phone||"", date:todayStr(), kind:preset?.kind||"credit",
+      amount:"", note:"", items:[blankCreditItem()] };
+
+function CreditEntry({initial, preset, products, customers, onSaved, onCancel}){
+  const C=useTheme(); const isMobile=useIsMobile();
+  const [draft,setDraft]=useState(()=>toCreditDraft(initial, preset));
+  const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
+  const isEdit=Boolean(initial);
+  const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(p.name.toLowerCase(),p)); return m; },[products]);
+
+  const isCredit=draft.kind==="credit";
+  const namedItems=draft.items.filter(it=>it.name.trim()!=="");
+  const itemsAmount=namedItems.reduce((s,it)=>s+nv(it.qty)*nv(it.price),0);
+  const hasItems=namedItems.length>0;
+  const amount=isCredit ? (hasItems?itemsAmount:nv(draft.amount)) : nv(draft.amount);
+
+  const setField=(k,v)=>setDraft(d=>({...d,[k]:v}));
+  const setItem=(id,k,v)=>setDraft(d=>({...d,items:d.items.map(it=>it.id===id?{...it,[k]:v}:it)}));
+  const addItem=()=>setDraft(d=>({...d,items:[...d.items,blankCreditItem()]}));
+  const removeItem=(id)=>setDraft(d=>({...d,items:d.items.filter(it=>it.id!==id)}));
+  const pickName=(id,name)=>setDraft(d=>({...d,items:d.items.map(it=>{
+    if(it.id!==id) return it; const p=prodByName.get(name.trim().toLowerCase()); if(!p) return {...it,name};
+    return {...it,name, price:it.price||String(p.sellPrice||"")};
+  })}));
+
+  async function save(){
+    if(!draft.customer.trim()){ setError("Enter the customer's name."); return; }
+    const items=isCredit ? namedItems.map(it=>({ id:it.id, name:it.name.trim(), qty:nv(it.qty), price:nv(it.price) })) : [];
+    if(!(amount>0)){ setError(isCredit?"Enter an amount, or add items they took.":"Enter the amount received."); return; }
+    if(!draft.date){ setError("Pick a date."); return; }
+    setError(""); setBusy(true);
+    const payload={ customer:draft.customer.trim(), phone:draft.phone.trim()||null, date:draft.date, kind:draft.kind, amount, note:draft.note.trim()||null, items };
+    try{
+      const rows = isEdit ? await creditDb.patch(draft.id,payload) : await creditDb.insert(payload);
+      onSaved(rows && rows[0] ? rows[0] : { ...payload, id:draft.id||uid() });
+    }catch(e){
+      console.error(e);
+      const msg=String(e&&e.message||"");
+      let nice="Could not save — check your connection and try again.";
+      if(/credit_entries/i.test(msg)&&/(exist|relation|schema cache)/i.test(msg)) nice="The credit_entries table isn't set up yet in Supabase.";
+      else if(/row-level security|policy/i.test(msg)) nice="Supabase blocked the save (row-level security) — add an anon policy to credit_entries.";
+      else if(msg) nice="Could not save: "+msg.replace(/\s+/g," ").slice(0,180);
+      setError(nice); setBusy(false);
+    }
+  }
+
+  const lbl={fontSize:11,color:C.muted,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"};
+  const focus=e=>e.target.style.borderColor=C.teal, blur=e=>e.target.style.borderColor=C.cardB;
+  const kindBtn=(k,label,col)=>(
+    <button onClick={()=>setField("kind",k)} style={{flex:1,padding:"10px",borderRadius:8,fontWeight:700,fontSize:13,cursor:"pointer",
+      border:`1px solid ${draft.kind===k?col:C.cardB}`, background:draft.kind===k?`${col}1a`:"transparent", color:draft.kind===k?col:C.muted}}>{label}</button>
+  );
+
+  return(
+    <div style={{paddingBottom:90}}>
+      <datalist id="hzx-customers">{(customers||[]).map(c=><option key={c.name} value={c.name}/>)}</datalist>
+      <datalist id="hzx-products">{(products||[]).map(p=><option key={p.name} value={p.name}/>)}</datalist>
+      <button onClick={onCancel} style={{display:"inline-flex",alignItems:"center",gap:6,background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:13,marginBottom:14}}>
+        <Ico d={IC.back} size={15} color={C.muted}/> Back to credit book
+      </button>
+
+      <Card style={{padding:isMobile?16:22,marginBottom:16}}>
+        <SLabel style={{marginBottom:14}}>{isEdit?"Edit entry":"New entry"}</SLabel>
+        <div style={{display:"flex",gap:10,marginBottom:16}}>
+          {kindBtn("credit","Credit given",C.red)}
+          {kindBtn("payment","Payment received",C.green)}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"2fr 1fr 1fr",gap:12}}>
+          <div><label style={lbl}>Customer</label>
+            <input value={draft.customer} list="hzx-customers" placeholder="e.g. John Deng" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("customer",e.target.value)}/></div>
+          <div><label style={lbl}>Phone (optional)</label>
+            <input value={draft.phone} placeholder="09xx…" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("phone",e.target.value)}/></div>
+          <div><label style={lbl}>Date</label>
+            <input type="date" value={draft.date} style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("date",e.target.value)}/></div>
+        </div>
+      </Card>
+
+      {isCredit && (
+        <>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <SLabel>What they took (optional)</SLabel>
+            <span style={{fontSize:12,color:C.muted}}>{draft.items.length} row{draft.items.length===1?"":"s"}</span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {draft.items.map((it,idx)=>{
+              const line=nv(it.qty)*nv(it.price);
+              return(
+                <Card key={it.id} style={{padding:16}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                    <span style={{width:24,height:24,borderRadius:6,background:C.tealBg,color:C.teal,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{idx+1}</span>
+                    <input value={it.name} list="hzx-products" placeholder="Item taken (e.g. Tusker)" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>pickName(it.id,e.target.value)}/>
+                    <button onClick={()=>removeItem(it.id)} title="Remove" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:8,cursor:"pointer",display:"flex",flexShrink:0}}>
+                      <Ico d={IC.trash} size={15} color={C.red}/>
+                    </button>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+                    <div><label style={lbl}>Qty</label>
+                      <input type="number" inputMode="decimal" value={it.qty} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,"qty",e.target.value)}/></div>
+                    <div><label style={lbl}>Price / piece</label>
+                      <input type="number" inputMode="decimal" value={it.price} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,"price",e.target.value)}/></div>
+                    <div style={{background:C.inputBg,borderRadius:8,padding:"8px 10px",alignSelf:"end"}}>
+                      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>Line total</div>
+                      <div style={{fontSize:13,fontWeight:600,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(line)}</div>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+          <button onClick={addItem} style={{marginTop:12,width:"100%",background:C.tealBg,border:`1px dashed ${C.teal}66`,borderRadius:10,color:C.teal,padding:"12px",fontWeight:600,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+            <Ico d={IC.add} size={16} color={C.teal}/> Add another item
+          </button>
+        </>
+      )}
+
+      {/* amount + note */}
+      <Card style={{padding:isMobile?16:22,marginTop:16}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 2fr",gap:12}}>
+          <div>
+            <label style={lbl}>{isCredit?"Amount owed (SSP)":"Amount received (SSP)"}</label>
+            {isCredit&&hasItems
+              ? <div style={{...mkINP(C),fontWeight:700,fontSize:16,display:"flex",alignItems:"center"}}>{fmt(itemsAmount)} <span style={{fontSize:10,color:C.muted,marginLeft:8}}>from items</span></div>
+              : <input type="number" inputMode="decimal" value={draft.amount} placeholder="0" style={{...mkINP(C),fontWeight:700,fontSize:16}} onFocus={focus} onBlur={blur} onChange={e=>setField("amount",e.target.value)}/>}
+          </div>
+          <div><label style={lbl}>Note (optional)</label>
+            <input value={draft.note} placeholder={isCredit?"e.g. promised to pay Friday":"e.g. part payment"} style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("note",e.target.value)}/></div>
+        </div>
+      </Card>
+
+      {error&&(
+        <div style={{marginTop:14,padding:"10px 14px",background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:8,fontSize:12,color:C.red,display:"flex",alignItems:"center",gap:8}}>
+          <Ico d={IC.alert} size={15} color={C.red}/> {error}
+        </div>
+      )}
+
+      {/* sticky save bar */}
+      <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.header,borderTop:`1px solid ${C.cardB}`,zIndex:20}}>
+        <div style={{maxWidth:1100,margin:"0 auto",padding:isMobile?"10px 14px":"12px 28px",display:"flex",alignItems:"center",gap:16}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:10,color:C.muted}}>{isCredit?"Credit to "+(draft.customer.trim()||"customer"):"Payment from "+(draft.customer.trim()||"customer")}</div>
+            <div style={{fontSize:16,fontWeight:700,color:isCredit?C.red:C.green,fontVariantNumeric:"tabular-nums"}}>{isCredit?"+":"−"}{fmt(amount)} SSP</div>
+          </div>
+          <button onClick={onCancel} disabled={busy} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"10px 16px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1}}>Cancel</button>
+          <button onClick={save} disabled={busy} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"10px 20px",fontWeight:700,fontSize:13,cursor:busy?"not-allowed":"pointer",opacity:busy?0.7:1,display:"flex",alignItems:"center",gap:8}}>
+            <Ico d={IC.check} size={16} color="#09111e"/> {busy?"Saving…":isEdit?"Save changes":"Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 function LoginScreen({onLogin, isDark, setIsDark}){
   const C=isDark?DARK:LIGHT; const isMobile=useIsMobile();
@@ -1222,12 +1602,16 @@ export default function App(){
 function MainApp({user, onLogout, isDark, setIsDark}){
   const C=isDark?DARK:LIGHT;
   const isMobile=useIsMobile();
-  const [view,setView]=useState("daily");          // daily | dailyEntry | dashboard | entry | reports
+  const [view,setView]=useState("daily");          // daily | dailyEntry | credit | creditEntry | dashboard | entry | reports
   const [editing,setEditing]=useState(null);        // stock batch being edited
   const [editingDaily,setEditingDaily]=useState(null);
+  const [editingCredit,setEditingCredit]=useState(null);
+  const [creditPreset,setCreditPreset]=useState(null);  // {customer,phone,kind} for a new entry
+  const [openCustomer,setOpenCustomer]=useState(null);  // customer name → detail modal
   const [batches,setBatches]=useState(null);        // null = loading
   const [dailies,setDailies]=useState(null);        // null = loading
-  const [toDelete,setToDelete]=useState(null);      // {kind:'stock'|'daily', row}
+  const [credits,setCredits]=useState(null);        // null = loading
+  const [toDelete,setToDelete]=useState(null);      // {kind:'stock'|'daily'|'credit', row}
   const [toast,setToast]=useState("");
   const [report,setReport]=useState(null);   // {type:'batch'|'summary', batch?}
   const [sidebarOpen,setSidebarOpen]=useState(false);
@@ -1241,10 +1625,16 @@ function MainApp({user, onLogout, isDark, setIsDark}){
     const m=String(e&&e.message||"");
     setToast(/daily_sales/i.test(m)&&/(exist|relation|schema cache)/i.test(m) ? "daily_sales table missing — create it in Supabase" : "Could not load daily sales: "+m.slice(0,80));
   }); },[]);
+  useEffect(()=>{ creditDb.fetchAll().then(setCredits).catch(e=>{ console.error(e); setCredits([]);
+    const m=String(e&&e.message||"");
+    setToast(/credit_entries/i.test(m)&&/(exist|relation|schema cache)/i.test(m) ? "credit_entries table missing — create it in Supabase" : "Could not load credit book: "+m.slice(0,80));
+  }); },[]);
   const flash=m=>{ setToast(m); setTimeout(()=>setToast(""),2400); };
   const products=React.useMemo(()=>productsFromBatches(batches),[batches]);
+  const customers=React.useMemo(()=>customersFromEntries(credits),[credits]);
 
-  const navTo=id=>{ setView(id); if(id==="entry") setEditing(null); if(id==="dailyEntry") setEditingDaily(null); if(isMobile) setSidebarOpen(false); };
+  const navTo=id=>{ setView(id); if(id==="entry") setEditing(null); if(id==="dailyEntry") setEditingDaily(null);
+    if(id==="creditEntry"){ setEditingCredit(null); setCreditPreset(null); } if(isMobile) setSidebarOpen(false); };
 
   // ── stock batches ──
   const startEdit=b=>{ setEditing(b); setView("entry"); };
@@ -1264,21 +1654,35 @@ function MainApp({user, onLogout, isDark, setIsDark}){
     flash(editingDaily?"Day updated":"Sales saved"); setView("daily"); setEditingDaily(null);
   };
 
+  // ── credit book ──
+  const giveCredit=(preset)=>{ setCreditPreset(preset||{kind:"credit"}); setEditingCredit(null); setOpenCustomer(null); setView("creditEntry"); };
+  const startEditCredit=e=>{ setEditingCredit(e); setCreditPreset(null); setOpenCustomer(null); setView("creditEntry"); };
+  const onSavedCredit=row=>{
+    setCredits(prev=>{ const list=prev||[]; const exists=list.some(e=>e.id===row.id);
+      const next=exists?list.map(e=>e.id===row.id?row:e):[row,...list];
+      return [...next].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))); });
+    flash(editingCredit?"Entry updated":(row.kind==="payment"?"Payment recorded":"Credit recorded"));
+    setView("credit"); setEditingCredit(null); setCreditPreset(null);
+  };
+
   async function confirmDelete(){
     const t=toDelete; setToDelete(null); if(!t) return;
     try{
       if(t.kind==="daily"){ await dailyDb.remove(t.row.id); setDailies(prev=>(prev||[]).filter(d=>d.id!==t.row.id)); flash("Day deleted"); }
+      else if(t.kind==="credit"){ await creditDb.remove(t.row.id); setCredits(prev=>(prev||[]).filter(e=>e.id!==t.row.id)); flash("Entry deleted"); }
       else { await stockDb.remove(t.row.id); setBatches(prev=>(prev||[]).filter(b=>b.id!==t.row.id)); flash("Stock deleted"); }
     }catch(e){ console.error(e); flash("Could not delete"); }
   }
 
   const NAV=[{id:"daily",label:"Daily Sales",icon:"cash"}];
   if(canDo(user,"canEdit")) NAV.push({id:"dailyEntry",label:"Record Day",icon:"calendar"});
+  NAV.push({id:"credit",label:"Credit Book",icon:"people"});
   NAV.push({id:"dashboard",label:"Stock & Profit",icon:"dashboard"});
   if(canDo(user,"canEdit")) NAV.push({id:"entry",label:"Add Stock",icon:"add"});
   NAV.push({id:"reports",label:"Reports",icon:"print"});
-  const TITLES={daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
-  const loading = batches===null || dailies===null;
+  const creditTitle=editingCredit?"Edit Entry":(creditPreset?.kind==="payment"?"Record Payment":"Give Credit");
+  const TITLES={daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",credit:"Credit Book",creditEntry:creditTitle,dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
+  const loading = batches===null || dailies===null || credits===null;
 
   return(
     <ThemeCtx.Provider value={C}>
@@ -1362,6 +1766,12 @@ function MainApp({user, onLogout, isDark, setIsDark}){
                 ? canDo(user,"canEdit")
                   ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
                   : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record sales.</div>
+              : view==="credit"
+                ? <CreditBook entries={credits} user={user} onGiveCredit={giveCredit} onOpenCustomer={setOpenCustomer}/>
+              : view==="creditEntry"
+                ? canDo(user,"canEdit")
+                  ? <CreditEntry key={editingCredit?editingCredit.id:"new-credit"} initial={editingCredit} preset={creditPreset} products={products} customers={customers} onSaved={onSavedCredit} onCancel={()=>{setView("credit");setEditingCredit(null);setCreditPreset(null);}}/>
+                  : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record credit.</div>
               : view==="dashboard"
                 ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={b=>setToDelete({kind:"stock",row:b})} onNew={()=>navTo("entry")} onPrint={b=>setReport({type:"batch",batch:b})}/>
               : view==="reports"
@@ -1373,6 +1783,12 @@ function MainApp({user, onLogout, isDark, setIsDark}){
         </div>
       </div>
 
+      {openCustomer&&<CustomerDetail name={openCustomer} entries={credits||[]} user={user}
+        onClose={()=>setOpenCustomer(null)}
+        onGiveCredit={p=>{setOpenCustomer(null);giveCredit(p);}}
+        onRecordPayment={p=>{setOpenCustomer(null);giveCredit(p);}}
+        onEdit={e=>{setOpenCustomer(null);startEditCredit(e);}}
+        onDelete={e=>setToDelete({kind:"credit",row:e})}/>}
       {toDelete&&<ConfirmDelete target={toDelete} onCancel={()=>setToDelete(null)} onConfirm={confirmDelete}/>}
       {report&&<PrintFrame onClose={()=>setReport(null)}>{report.type==="summary"?<SummaryReport batches={batches}/>:<BatchReport batch={report.batch}/>}</PrintFrame>}
       {toast&&(
