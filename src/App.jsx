@@ -918,21 +918,28 @@ function DailyEntry({initial, products, onSaved, onCancel}){
   const isEdit=Boolean(initial);
   const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(p.name.toLowerCase(),p)); return m; },[products]);
 
+  // Cost per piece is automatic: read it from the matching stock product.
+  // Falls back to any cost stored on the row (old records) when the item isn't in stock.
+  const matchOf=(it)=>prodByName.get((it.name||"").trim().toLowerCase());
+  const costFor=(it)=>{ const p=matchOf(it); return p ? nv(p.costPrice) : nv(it.costPrice); };
+  const withCost=(it)=>({...it, costPrice:costFor(it)});  // resolved item for calc/save
+
   const setField=(k,v)=>setDraft(d=>({...d,[k]:v}));
   const setItem=(id,k,v)=>setDraft(d=>({...d,items:d.items.map(it=>it.id===id?{...it,[k]:v}:it)}));
   const addItem=()=>setDraft(d=>({...d,items:[...d.items,blankSale()]}));
   const removeItem=(id)=>setDraft(d=>({...d,items:d.items.filter(it=>it.id!==id)}));
-  // when an item name matches a known product, auto-fill its price & cost (only if still blank)
+  // when an item name matches a known product, auto-fill its sell price (only if still blank);
+  // its cost always comes from stock automatically (see costFor)
   const pickName=(id,name)=>setDraft(d=>({...d,items:d.items.map(it=>{
     if(it.id!==id) return it; const p=prodByName.get(name.trim().toLowerCase()); if(!p) return {...it,name};
-    return {...it,name, sellPrice:it.sellPrice||String(p.sellPrice||""), costPrice:it.costPrice||String(p.costPrice||"")};
+    return {...it,name, sellPrice:it.sellPrice||String(p.sellPrice||"")};
   })}));
 
-  const totals=dailyCalc(draft);
+  const totals=dailyCalc({...draft, items:draft.items.map(withCost)});
 
   async function save(){
     const items=draft.items.filter(it=>it.name.trim()!=="").map(it=>({
-      id:it.id, name:it.name.trim(), qtySold:nv(it.qtySold), sellPrice:nv(it.sellPrice), costPrice:nv(it.costPrice) }));
+      id:it.id, name:it.name.trim(), qtySold:nv(it.qtySold), sellPrice:nv(it.sellPrice), costPrice:costFor(it) }));
     if(!draft.date){ setError("Pick the date for these sales."); return; }
     if(items.length===0){ setError("Add at least one item that you sold."); return; }
     setError(""); setBusy(true);
@@ -982,7 +989,9 @@ function DailyEntry({initial, products, onSaved, onCancel}){
 
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
         {draft.items.map((it,idx)=>{
-          const c=saleItemCalc(it);
+          const cost=costFor(it); const inStock=!!matchOf(it);
+          const named=it.name.trim()!==""; const knownCost=inStock||nv(it.costPrice)>0;
+          const c=saleItemCalc({...it,costPrice:cost});
           return(
             <Card key={it.id} style={{padding:16}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
@@ -992,13 +1001,20 @@ function DailyEntry({initial, products, onSaved, onCancel}){
                   <Ico d={IC.trash} size={15} color={C.red}/>
                 </button>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
-                {[["Qty sold","qtySold"],["Sell price / piece","sellPrice"],["Cost / piece","costPrice"]].map(([label,key])=>(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
+                {[["Qty sold","qtySold"],["Sell price / piece","sellPrice"]].map(([label,key])=>(
                   <div key={key}><label style={lbl}>{label}</label>
                     <input type="number" inputMode="decimal" value={it[key]} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,key,e.target.value)}/></div>
                 ))}
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginTop:12}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:12}}>
+                {/* Cost / piece — read-only, pulled from stock */}
+                <div style={{background:C.inputBg,borderRadius:8,padding:"8px 10px"}}>
+                  <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>Cost / piece {knownCost?"· from stock":""}</div>
+                  {knownCost
+                    ? <div style={{fontSize:13,fontWeight:600,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(cost)}</div>
+                    : <div style={{fontSize:11,fontWeight:600,color:C.orange}}>{named?"not in stock":"—"}</div>}
+                </div>
                 {[["Money in",c.revenue,C.blue],["Profit",c.profit,c.profit>=0?C.green:C.red]].map(([label,val,col])=>(
                   <div key={label} style={{background:C.inputBg,borderRadius:8,padding:"8px 10px"}}>
                     <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>{label}</div>
@@ -1006,6 +1022,11 @@ function DailyEntry({initial, products, onSaved, onCancel}){
                   </div>
                 ))}
               </div>
+              {named&&!knownCost&&(
+                <div style={{fontSize:11,color:C.muted,marginTop:8,display:"flex",alignItems:"center",gap:6}}>
+                  <Ico d={IC.alert} size={13} color={C.orange}/> Pick the item from the list, or add it under Add Stock, so its cost is known.
+                </div>
+              )}
             </Card>
           );
         })}
