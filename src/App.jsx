@@ -63,6 +63,14 @@ const stockDb = {
   remove:   (id)    => sbFetch(`/stock_batches?id=eq.${id}`,{method:"DELETE",headers:{...H,Prefer:""}}),
 };
 
+// ── daily_sales CRUD (one row per day, items = what was sold that day) ──────────
+const dailyDb = {
+  fetchAll: ()      => sbFetch(`/daily_sales?order=date.desc,created_at.desc`),
+  insert:   (f)     => sbFetch(`/daily_sales`,{method:"POST",body:JSON.stringify(f)}),
+  patch:    (id,f)  => sbFetch(`/daily_sales?id=eq.${id}`,{method:"PATCH",body:JSON.stringify(f)}),
+  remove:   (id)    => sbFetch(`/daily_sales?id=eq.${id}`,{method:"DELETE",headers:{...H,Prefer:""}}),
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const nv  = v => Number(v) || 0;
 const fmt = v => nv(v).toLocaleString();
@@ -86,6 +94,28 @@ const batchCalc = (b) => {
     takeHome: profitOnStock - expenses,
     margin: sales>0 ? profitOnStock/sales : 0 };
 };
+
+// ── Daily sales: each item = {name, qtySold, sellPrice, costPrice} ──────────────
+const saleItemCalc = (it) => {
+  const qty=nv(it.qtySold), revenue=qty*nv(it.sellPrice), cost=qty*nv(it.costPrice);
+  return { qty, revenue, cost, profit: revenue-cost };
+};
+const dailyCalc = (d) => {
+  let revenue=0, cost=0, qty=0;
+  (d.items||[]).forEach(it=>{ const c=saleItemCalc(it); revenue+=c.revenue; cost+=c.cost; qty+=c.qty; });
+  const grossProfit=revenue-cost, expenses=nv(d.expenses);
+  return { revenue, cost, qty, grossProfit, expenses, takeHome: grossProfit-expenses, margin: revenue>0 ? grossProfit/revenue : 0 };
+};
+// Known products derived from stock batches → powers the daily picker (remembers price & cost-per-piece)
+function productsFromBatches(batches){
+  const map=new Map();
+  (batches||[]).forEach(b=>(b.items||[]).forEach(it=>{
+    const name=(it.name||"").trim(); if(!name) return;
+    const pieces=nv(it.piecesPerUnit), costPiece=pieces>0 ? nv(it.costPerUnit)/pieces : 0;
+    map.set(name.toLowerCase(),{ name, sellPrice:nv(it.pricePerPiece), costPrice:Math.round(costPiece) });
+  }));
+  return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
+}
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const DARK = {
@@ -122,6 +152,9 @@ const IC = {
   wallet:"M21 12V7H5a2 2 0 010-4h14v4M3 5v14a2 2 0 002 2h16v-5M18 12a2 2 0 000 4h4v-4h-4z",
   beer:"M5 8h11v9a3 3 0 01-3 3H8a3 3 0 01-3-3V8zm11 1h2a2 2 0 012 2v2a2 2 0 01-2 2h-2M8 4v2m3-2v2m3-2v2",
   alert:"M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  cash:"M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6",
+  calendar:"M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z",
+  trophy:"M8 21h8m-4-4v4m5-17h2a2 2 0 010 4 4 4 0 01-2 2M7 4H5a2 2 0 000 4 4 4 0 002 2m0-8h10v5a5 5 0 01-10 0V4z",
 };
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
@@ -514,14 +547,17 @@ function StockEntry({initial, onSaved, onCancel, onPrint}){
 }
 
 // ── Confirm delete ────────────────────────────────────────────────────────────
-function ConfirmDelete({batch,onCancel,onConfirm}){
+function ConfirmDelete({target,onCancel,onConfirm}){
   const C=useTheme();
+  const isDaily=target.kind==="daily"; const row=target.row;
+  const label=isDaily?niceDate(row.date):row.name;
+  const count=(row.items||[]).length;
   return(
     <div onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.cardB}`,borderRadius:12,padding:24,maxWidth:380,width:"100%"}}>
-        <div style={{fontSize:16,fontWeight:700,color:C.text}}>Delete this stock?</div>
+        <div style={{fontSize:16,fontWeight:700,color:C.text}}>{isDaily?"Delete this day's sales?":"Delete this stock?"}</div>
         <div style={{fontSize:13,color:C.muted,marginTop:8,lineHeight:1.6}}>
-          <strong style={{color:C.text}}>{batch.name}</strong> and its {batch.items.length} items will be removed. This can't be undone.
+          <strong style={{color:C.text}}>{label}</strong> and its {count} item{count===1?"":"s"} will be removed. This can't be undone.
         </div>
         <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:20}}>
           <button onClick={onCancel} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 16px",fontSize:13,cursor:"pointer"}}>Keep it</button>
@@ -715,6 +751,297 @@ function ReportsView({batches, onPrintBatch, onPrintSummary}){
   );
 }
 
+// ── DAILY SALES DASHBOARD ─────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().slice(0,10);
+const niceDate = (s) => s ? new Date(s+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "No date";
+
+function DailySales({dailies, user, onEdit, onDelete, onNew}){
+  const C=useTheme(); const TT=useTT();
+  const isMobile=useIsMobile(); const isTablet=useIsTablet();
+
+  // Today + this-month totals
+  const today=todayStr(); const ym=today.slice(0,7);
+  const todayT = dailies.filter(d=>d.date===today).reduce((a,d)=>{ const t=dailyCalc(d); a.revenue+=t.revenue; a.takeHome+=t.takeHome; a.qty+=t.qty; return a; },{revenue:0,takeHome:0,qty:0});
+  const monthT = dailies.filter(d=>String(d.date||"").startsWith(ym)).reduce((a,d)=>{ const t=dailyCalc(d); a.revenue+=t.revenue; a.takeHome+=t.takeHome; return a; },{revenue:0,takeHome:0});
+
+  // Leaderboard: aggregate each item across every day
+  const lb=new Map();
+  dailies.forEach(d=>(d.items||[]).forEach(it=>{
+    const name=(it.name||"").trim(); if(!name) return;
+    const c=saleItemCalc(it); const e=lb.get(name)||{name,qty:0,revenue:0,profit:0};
+    e.qty+=c.qty; e.revenue+=c.revenue; e.profit+=c.profit; lb.set(name,e);
+  }));
+  const leaders=[...lb.values()].sort((a,b)=>b.revenue-a.revenue);
+  const topRevenue=leaders.length?leaders[0].revenue:0;
+  const MEDAL=["#fbbf24","#94a3b8","#d97706"];
+
+  // Chart: money in per day (most recent 14 days, oldest→newest)
+  const byDay=new Map();
+  dailies.forEach(d=>{ if(!d.date) return; const t=dailyCalc(d); const e=byDay.get(d.date)||{revenue:0,profit:0};
+    e.revenue+=t.revenue; e.profit+=t.takeHome; byDay.set(d.date,e); });
+  const chartData=[...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-14)
+    .map(([date,v])=>({ name:new Date(date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"}), "Money in":v.revenue, Profit:v.profit }));
+
+  if(dailies.length===0){
+    return(
+      <div style={{textAlign:"center",maxWidth:440,margin:"60px auto",padding:"0 20px"}}>
+        <div style={{width:60,height:60,borderRadius:16,background:C.tealBg,border:`1px solid ${C.teal}44`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 18px"}}>
+          <Ico d={IC.cash} size={26} color={C.teal}/>
+        </div>
+        <div style={{fontSize:18,fontWeight:700,color:C.text}}>No daily sales yet</div>
+        <div style={{fontSize:13,color:C.muted,marginTop:6,lineHeight:1.6}}>At the end of each day, record what you sold. You'll instantly see how much you made that day and which item is selling best.</div>
+        {canDo(user,"canEdit")&&(
+          <button onClick={onNew} style={{marginTop:18,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 20px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
+            <Ico d={IC.add} size={16} color="#09111e"/> Record today's sales
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      {canDo(user,"canEdit")&&(
+        <button onClick={onNew} style={{marginBottom:16,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 18px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
+          <Ico d={IC.add} size={16} color="#09111e"/> Record today's sales
+        </button>
+      )}
+
+      {/* KPI row */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:16}}>
+        <KPICard label="Today · Money In"   value={todayT.revenue}  color={C.blue}/>
+        <KPICard label="Today · You Make"   value={todayT.takeHome} color={todayT.takeHome>=0?C.green:C.red}/>
+        <KPICard label="This Month · Money In" value={monthT.revenue}  color={C.teal}/>
+        <KPICard label="This Month · You Make" value={monthT.takeHome} color={monthT.takeHome>=0?C.green:C.red}/>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:isMobile||isTablet?"1fr":"3fr 2fr",gap:16,marginBottom:16,alignItems:"start"}}>
+        {/* chart */}
+        <Card style={{padding:isMobile?16:22}}>
+          <SLabel style={{marginBottom:16}}>Money in vs. profit (per day)</SLabel>
+          <ResponsiveContainer width="100%" height={isMobile?220:260}>
+            <BarChart data={chartData} margin={{top:4,right:4,left:-10,bottom:isMobile?28:8}} barGap={2}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.subtle} vertical={false}/>
+              <XAxis dataKey="name" tick={{fill:C.muted,fontSize:10}} axisLine={false} tickLine={false}
+                angle={isMobile?-25:0} textAnchor={isMobile?"end":"middle"} interval={0} height={isMobile?44:24}/>
+              <YAxis tick={{fill:C.muted,fontSize:9}} axisLine={false} tickLine={false} width={40} tickFormatter={compact}/>
+              <Tooltip {...TT} cursor={{fill:C.tealBg}}/>
+              <Bar dataKey="Money in" fill={C.blue} radius={[3,3,0,0]} maxBarSize={26}/>
+              <Bar dataKey="Profit"   fill={C.teal} radius={[3,3,0,0]} maxBarSize={26}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* leaderboard */}
+        <Card style={{padding:isMobile?16:22}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+            <Ico d={IC.trophy} size={16} color={C.yellow}/><SLabel>Leading items (by money in)</SLabel>
+          </div>
+          {leaders.length===0
+            ? <div style={{fontSize:12,color:C.muted}}>No items recorded yet.</div>
+            : <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {leaders.slice(0,6).map((it,i)=>(
+                  <div key={it.name}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
+                      <span style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,
+                        background:i<3?MEDAL[i]:C.subtle,color:i<3?"#09111e":C.muted}}>{i+1}</span>
+                      <div style={{flex:1,minWidth:0,fontSize:13,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{it.name}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(it.revenue)}</div>
+                    </div>
+                    <div style={{height:6,borderRadius:4,background:C.subtle,overflow:"hidden"}}>
+                      <div style={{height:"100%",borderRadius:4,width:`${topRevenue>0?Math.max(4,it.revenue/topRevenue*100):0}%`,background:i<3?MEDAL[i]:C.teal}}/>
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,marginTop:3}}>{fmt(it.qty)} sold · {fmt(it.profit)} profit</div>
+                  </div>
+                ))}
+              </div>}
+        </Card>
+      </div>
+
+      {/* daily list */}
+      <SLabel style={{marginBottom:12}}>Daily records</SLabel>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":isTablet?"1fr 1fr":"repeat(3,1fr)",gap:14}}>
+        {dailies.map(d=>{
+          const t=dailyCalc(d);
+          const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
+          return(
+            <Card key={d.id} style={{padding:18}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>{niceDate(d.date)}{d.date===today&&<span style={{fontSize:10,marginLeft:6,padding:"1px 7px",borderRadius:20,background:C.tealBg,color:C.teal,fontWeight:600}}>Today</span>}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{(d.items||[]).length} item{(d.items||[]).length===1?"":"s"} · {fmt(t.qty)} sold{d.note?` · ${d.note}`:""}</div>
+                </div>
+                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  {canDo(user,"canEdit")&&(
+                    <button onClick={()=>onEdit(d)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                      <Ico d={IC.edit} size={14} color={C.teal}/>
+                    </button>
+                  )}
+                  {canDo(user,"canDelete")&&(
+                    <button onClick={()=>onDelete(d)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                      <Ico d={IC.trash} size={14} color={C.red}/>
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
+                <div><div style={{fontSize:10,color:C.muted}}>Money in</div><div style={{fontSize:14,fontWeight:600,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(t.revenue)}</div></div>
+                <div><div style={{fontSize:10,color:C.muted}}>Best seller</div><div style={{fontSize:14,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{top?top.name:"—"}</div></div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginTop:12,paddingTop:12,borderTop:`1px solid ${C.divider}`}}>
+                <div>
+                  <div style={{fontSize:10,color:C.muted}}>You make</div>
+                  <div style={{fontSize:18,fontWeight:700,color:t.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</div>
+                </div>
+                <span style={{fontSize:11,padding:"2px 9px",borderRadius:20,fontWeight:600,background:C.tealBg,color:C.teal}}>{(t.margin*100).toFixed(0)}%</span>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── DAILY SALES ENTRY ─────────────────────────────────────────────────────────
+const blankSale = () => ({ id:uid(), name:"", qtySold:"", sellPrice:"", costPrice:"" });
+const toDailyDraft = (d) => d
+  ? { id:d.id, date:d.date||"", note:d.note||"", expenses:String(d.expenses??""),
+      items:(d.items||[]).map(it=>({ id:it.id||uid(), name:it.name,
+        qtySold:String(it.qtySold??""), sellPrice:String(it.sellPrice??""), costPrice:String(it.costPrice??"") })) }
+  : { id:null, date:todayStr(), note:"", expenses:"", items:[blankSale()] };
+
+function DailyEntry({initial, products, onSaved, onCancel}){
+  const C=useTheme(); const isMobile=useIsMobile();
+  const [draft,setDraft]=useState(()=>toDailyDraft(initial));
+  const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
+  const isEdit=Boolean(initial);
+  const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(p.name.toLowerCase(),p)); return m; },[products]);
+
+  const setField=(k,v)=>setDraft(d=>({...d,[k]:v}));
+  const setItem=(id,k,v)=>setDraft(d=>({...d,items:d.items.map(it=>it.id===id?{...it,[k]:v}:it)}));
+  const addItem=()=>setDraft(d=>({...d,items:[...d.items,blankSale()]}));
+  const removeItem=(id)=>setDraft(d=>({...d,items:d.items.filter(it=>it.id!==id)}));
+  // when an item name matches a known product, auto-fill its price & cost (only if still blank)
+  const pickName=(id,name)=>setDraft(d=>({...d,items:d.items.map(it=>{
+    if(it.id!==id) return it; const p=prodByName.get(name.trim().toLowerCase()); if(!p) return {...it,name};
+    return {...it,name, sellPrice:it.sellPrice||String(p.sellPrice||""), costPrice:it.costPrice||String(p.costPrice||"")};
+  })}));
+
+  const totals=dailyCalc(draft);
+
+  async function save(){
+    const items=draft.items.filter(it=>it.name.trim()!=="").map(it=>({
+      id:it.id, name:it.name.trim(), qtySold:nv(it.qtySold), sellPrice:nv(it.sellPrice), costPrice:nv(it.costPrice) }));
+    if(!draft.date){ setError("Pick the date for these sales."); return; }
+    if(items.length===0){ setError("Add at least one item that you sold."); return; }
+    setError(""); setBusy(true);
+    const payload={ date:draft.date, note:draft.note.trim()||null, expenses:nv(draft.expenses), items };
+    try{
+      const rows = isEdit ? await dailyDb.patch(draft.id,payload) : await dailyDb.insert(payload);
+      onSaved(rows && rows[0] ? rows[0] : { ...payload, id:draft.id||uid() });
+    }catch(e){
+      console.error(e);
+      const msg=String(e&&e.message||"");
+      let nice="Could not save — check your connection and try again.";
+      if(/daily_sales/i.test(msg)&&/(exist|relation|schema cache)/i.test(msg)) nice='The daily_sales table isn\'t set up yet. In Supabase create it (see daily_sales schema).';
+      else if(/row-level security|policy/i.test(msg)) nice="Supabase blocked the save (row-level security) — add an anon policy to daily_sales.";
+      else if(msg) nice="Could not save: "+msg.replace(/\s+/g," ").slice(0,180);
+      setError(nice); setBusy(false);
+    }
+  }
+
+  const lbl={fontSize:11,color:C.muted,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"};
+  const focus=e=>e.target.style.borderColor=C.teal, blur=e=>e.target.style.borderColor=C.cardB;
+
+  return(
+    <div style={{paddingBottom:90}}>
+      <datalist id="hzx-products">{(products||[]).map(p=><option key={p.name} value={p.name}/>)}</datalist>
+      <button onClick={onCancel} style={{display:"inline-flex",alignItems:"center",gap:6,background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:13,marginBottom:14}}>
+        <Ico d={IC.back} size={15} color={C.muted}/> Back to daily sales
+      </button>
+
+      {/* day details */}
+      <Card style={{padding:isMobile?16:22,marginBottom:16}}>
+        <SLabel style={{marginBottom:14}}>{isEdit?"Edit day":"New day"}</SLabel>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr 1fr",gap:12}}>
+          <div><label style={lbl}>Date</label>
+            <input type="date" value={draft.date} style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("date",e.target.value)}/></div>
+          <div><label style={lbl}>Note (optional)</label>
+            <input value={draft.note} placeholder="e.g. busy Friday" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("note",e.target.value)}/></div>
+          <div><label style={lbl}>Day's expenses (SSP)</label>
+            <input type="number" inputMode="decimal" value={draft.expenses} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setField("expenses",e.target.value)}/></div>
+        </div>
+      </Card>
+
+      {/* items sold */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <SLabel>Items sold today</SLabel>
+        <span style={{fontSize:12,color:C.muted}}>{draft.items.length} row{draft.items.length===1?"":"s"}</span>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {draft.items.map((it,idx)=>{
+          const c=saleItemCalc(it);
+          return(
+            <Card key={it.id} style={{padding:16}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                <span style={{width:24,height:24,borderRadius:6,background:C.tealBg,color:C.teal,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{idx+1}</span>
+                <input value={it.name} list="hzx-products" placeholder="Item sold (e.g. Tusker)" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>pickName(it.id,e.target.value)}/>
+                <button onClick={()=>removeItem(it.id)} title="Remove" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:8,cursor:"pointer",display:"flex",flexShrink:0}}>
+                  <Ico d={IC.trash} size={15} color={C.red}/>
+                </button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+                {[["Qty sold","qtySold"],["Sell price / piece","sellPrice"],["Cost / piece","costPrice"]].map(([label,key])=>(
+                  <div key={key}><label style={lbl}>{label}</label>
+                    <input type="number" inputMode="decimal" value={it[key]} placeholder="0" style={mkINP(C)} onFocus={focus} onBlur={blur} onChange={e=>setItem(it.id,key,e.target.value)}/></div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginTop:12}}>
+                {[["Money in",c.revenue,C.blue],["Profit",c.profit,c.profit>=0?C.green:C.red]].map(([label,val,col])=>(
+                  <div key={label} style={{background:C.inputBg,borderRadius:8,padding:"8px 10px"}}>
+                    <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>{label}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums"}}>{fmt(val)}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      <button onClick={addItem} style={{marginTop:12,width:"100%",background:C.tealBg,border:`1px dashed ${C.teal}66`,borderRadius:10,color:C.teal,padding:"12px",fontWeight:600,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+        <Ico d={IC.add} size={16} color={C.teal}/> Add another item
+      </button>
+
+      {error&&(
+        <div style={{marginTop:14,padding:"10px 14px",background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:8,fontSize:12,color:C.red,display:"flex",alignItems:"center",gap:8}}>
+          <Ico d={IC.alert} size={15} color={C.red}/> {error}
+        </div>
+      )}
+
+      {/* sticky save bar */}
+      <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.header,borderTop:`1px solid ${C.cardB}`,zIndex:20}}>
+        <div style={{maxWidth:1100,margin:"0 auto",padding:isMobile?"10px 14px":"12px 28px",display:"flex",alignItems:"center",gap:16}}>
+          {!isMobile&&(
+            <div style={{display:"flex",gap:24,flex:1}}>
+              <div><div style={{fontSize:10,color:C.muted}}>Money in</div><div style={{fontSize:15,fontWeight:700,color:C.blue,fontVariantNumeric:"tabular-nums"}}>{fmt(totals.revenue)}</div></div>
+              <div><div style={{fontSize:10,color:C.muted}}>Items sold</div><div style={{fontSize:15,fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(totals.qty)}</div></div>
+              <div><div style={{fontSize:10,color:C.muted}}>You make</div><div style={{fontSize:15,fontWeight:700,color:totals.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)}</div></div>
+            </div>
+          )}
+          {isMobile&&<div style={{flex:1}}><div style={{fontSize:10,color:C.muted}}>You make</div><div style={{fontSize:16,fontWeight:700,color:totals.takeHome>=0?C.green:C.red}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)} SSP</div></div>}
+          <button onClick={onCancel} disabled={busy} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"10px 16px",fontSize:13,cursor:"pointer",opacity:busy?0.5:1}}>Cancel</button>
+          <button onClick={save} disabled={busy} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"10px 20px",fontWeight:700,fontSize:13,cursor:busy?"not-allowed":"pointer",opacity:busy?0.7:1,display:"flex",alignItems:"center",gap:8}}>
+            <Ico d={IC.check} size={16} color="#09111e"/> {busy?"Saving…":isEdit?"Save changes":"Save day"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 function LoginScreen({onLogin, isDark, setIsDark}){
   const C=isDark?DARK:LIGHT; const isMobile=useIsMobile();
@@ -806,10 +1133,12 @@ export default function App(){
 function MainApp({user, onLogout, isDark, setIsDark}){
   const C=isDark?DARK:LIGHT;
   const isMobile=useIsMobile();
-  const [view,setView]=useState("dashboard");      // dashboard | entry
-  const [editing,setEditing]=useState(null);
+  const [view,setView]=useState("daily");          // daily | dailyEntry | dashboard | entry | reports
+  const [editing,setEditing]=useState(null);        // stock batch being edited
+  const [editingDaily,setEditingDaily]=useState(null);
   const [batches,setBatches]=useState(null);        // null = loading
-  const [toDelete,setToDelete]=useState(null);
+  const [dailies,setDailies]=useState(null);        // null = loading
+  const [toDelete,setToDelete]=useState(null);      // {kind:'stock'|'daily', row}
   const [toast,setToast]=useState("");
   const [report,setReport]=useState(null);   // {type:'batch'|'summary', batch?}
   const [sidebarOpen,setSidebarOpen]=useState(false);
@@ -819,9 +1148,16 @@ function MainApp({user, onLogout, isDark, setIsDark}){
     const m=String(e&&e.message||"");
     setToast(/stock_batches/i.test(m)&&/(exist|relation|schema cache)/i.test(m) ? "stock_batches table missing — run schema.sql" : "Could not load stock: "+m.slice(0,80));
   }); },[]);
+  useEffect(()=>{ dailyDb.fetchAll().then(setDailies).catch(e=>{ console.error(e); setDailies([]);
+    const m=String(e&&e.message||"");
+    setToast(/daily_sales/i.test(m)&&/(exist|relation|schema cache)/i.test(m) ? "daily_sales table missing — create it in Supabase" : "Could not load daily sales: "+m.slice(0,80));
+  }); },[]);
   const flash=m=>{ setToast(m); setTimeout(()=>setToast(""),2400); };
+  const products=React.useMemo(()=>productsFromBatches(batches),[batches]);
 
-  const navTo=id=>{ setView(id); if(id==="entry") setEditing(null); if(isMobile) setSidebarOpen(false); };
+  const navTo=id=>{ setView(id); if(id==="entry") setEditing(null); if(id==="dailyEntry") setEditingDaily(null); if(isMobile) setSidebarOpen(false); };
+
+  // ── stock batches ──
   const startEdit=b=>{ setEditing(b); setView("entry"); };
   const onSaved=row=>{
     setBatches(prev=>{ const list=prev||[]; const exists=list.some(b=>b.id===row.id);
@@ -829,16 +1165,31 @@ function MainApp({user, onLogout, isDark, setIsDark}){
       return [...next].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))); });
     flash(editing?"Stock updated":"Stock saved"); setView("dashboard"); setEditing(null);
   };
+
+  // ── daily sales ──
+  const startEditDaily=d=>{ setEditingDaily(d); setView("dailyEntry"); };
+  const onSavedDaily=row=>{
+    setDailies(prev=>{ const list=prev||[]; const exists=list.some(d=>d.id===row.id);
+      const next=exists?list.map(d=>d.id===row.id?row:d):[row,...list];
+      return [...next].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))); });
+    flash(editingDaily?"Day updated":"Sales saved"); setView("daily"); setEditingDaily(null);
+  };
+
   async function confirmDelete(){
-    const t=toDelete; setToDelete(null);
-    try{ await stockDb.remove(t.id); setBatches(prev=>(prev||[]).filter(b=>b.id!==t.id)); flash("Stock deleted"); }
-    catch(e){ console.error(e); flash("Could not delete"); }
+    const t=toDelete; setToDelete(null); if(!t) return;
+    try{
+      if(t.kind==="daily"){ await dailyDb.remove(t.row.id); setDailies(prev=>(prev||[]).filter(d=>d.id!==t.row.id)); flash("Day deleted"); }
+      else { await stockDb.remove(t.row.id); setBatches(prev=>(prev||[]).filter(b=>b.id!==t.row.id)); flash("Stock deleted"); }
+    }catch(e){ console.error(e); flash("Could not delete"); }
   }
 
-  const NAV=[{id:"dashboard",label:"Dashboard",icon:"dashboard"}];
+  const NAV=[{id:"daily",label:"Daily Sales",icon:"cash"}];
+  if(canDo(user,"canEdit")) NAV.push({id:"dailyEntry",label:"Record Day",icon:"calendar"});
+  NAV.push({id:"dashboard",label:"Stock & Profit",icon:"dashboard"});
   if(canDo(user,"canEdit")) NAV.push({id:"entry",label:"Add Stock",icon:"add"});
   NAV.push({id:"reports",label:"Reports",icon:"print"});
-  const TITLES={dashboard:"Business Overview",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
+  const TITLES={daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
+  const loading = batches===null || dailies===null;
 
   return(
     <ThemeCtx.Provider value={C}>
@@ -914,10 +1265,16 @@ function MainApp({user, onLogout, isDark, setIsDark}){
             </div>
           )}
           <ErrorBoundary theme={C}>
-            {batches===null
+            {loading
               ? <Loading/>
+              : view==="daily"
+                ? <DailySales dailies={dailies} user={user} onEdit={startEditDaily} onDelete={d=>setToDelete({kind:"daily",row:d})} onNew={()=>navTo("dailyEntry")}/>
+              : view==="dailyEntry"
+                ? canDo(user,"canEdit")
+                  ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
+                  : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record sales.</div>
               : view==="dashboard"
-                ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={setToDelete} onNew={()=>navTo("entry")} onPrint={b=>setReport({type:"batch",batch:b})}/>
+                ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={b=>setToDelete({kind:"stock",row:b})} onNew={()=>navTo("entry")} onPrint={b=>setReport({type:"batch",batch:b})}/>
               : view==="reports"
                 ? <ReportsView batches={batches} onPrintBatch={b=>setReport({type:"batch",batch:b})} onPrintSummary={()=>setReport({type:"summary"})}/>
               : canDo(user,"canEdit")
@@ -927,7 +1284,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
         </div>
       </div>
 
-      {toDelete&&<ConfirmDelete batch={toDelete} onCancel={()=>setToDelete(null)} onConfirm={confirmDelete}/>}
+      {toDelete&&<ConfirmDelete target={toDelete} onCancel={()=>setToDelete(null)} onConfirm={confirmDelete}/>}
       {report&&<PrintFrame onClose={()=>setReport(null)}>{report.type==="summary"?<SummaryReport batches={batches}/>:<BatchReport batch={report.batch}/>}</PrintFrame>}
       {toast&&(
         <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:C.card,border:`1px solid ${C.cardB}`,borderRadius:20,padding:"10px 18px",fontSize:13,fontWeight:600,color:C.text,zIndex:60,display:"flex",alignItems:"center",gap:8,boxShadow:"0 8px 24px rgba(0,0,0,0.3)"}}>
