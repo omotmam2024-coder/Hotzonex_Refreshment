@@ -82,6 +82,8 @@ const creditDb = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const nv  = v => Number(v) || 0;
 const fmt = v => nv(v).toLocaleString();
+// match item/customer names case-insensitively and tolerant of extra spaces ("South  Beer" == "South Beer")
+const normKey = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 const uid = () => Math.random().toString(36).slice(2,9);
 const compact = v => { const a=Math.abs(v); return a>=1e6?`${(v/1e6).toFixed(a>=1e7?0:1)}M`:a>=1e3?`${Math.round(v/1e3)}K`:`${v}`; };
 const itemCalc = (it) => {
@@ -121,7 +123,7 @@ function productsFromBatches(batches){
   (batches||[]).forEach(b=>{ const bdate=String(b.date||"");
     (b.items||[]).forEach(it=>{
       const name=(it.name||"").trim(); if(!name) return;
-      const key=name.toLowerCase(); const prev=map.get(key);
+      const key=normKey(name); const prev=map.get(key);
       if(prev && String(prev._date)>=bdate) return;          // already have prices from a newer (or same) batch
       const pieces=nv(it.piecesPerUnit), costPiece=pieces>0 ? nv(it.costPerUnit)/pieces : 0;
       map.set(key,{ name, sellPrice:nv(it.pricePerPiece), costPrice:Math.round(costPiece), _date:bdate });
@@ -130,13 +132,33 @@ function productsFromBatches(batches){
   return [...map.values()].map(({_date,...p})=>p).sort((a,b)=>a.name.localeCompare(b.name));
 }
 
+// Live stock levels: pieces bought (from stock batches) minus pieces sold (in daily sales).
+// "low" = less than one full carton (piecesPerUnit) left; "out" = nothing left.
+function stockLevels(batches, dailies){
+  const m=new Map();
+  const get=name=>{ const key=normKey(name); let e=m.get(key); if(!e){ e={name, bought:0, sold:0, perUnit:0, _date:""}; m.set(key,e); } return e; };
+  (batches||[]).forEach(b=>{ const bdate=String(b.date||"");
+    (b.items||[]).forEach(it=>{ const name=(it.name||"").trim(); if(!name) return; const e=get(name);
+      e.bought += nv(it.unitsBought)*nv(it.piecesPerUnit);
+      if(bdate>=e._date){ e.perUnit=nv(it.piecesPerUnit); e._date=bdate; e.name=name; }
+    });
+  });
+  (dailies||[]).forEach(d=>(d.items||[]).forEach(it=>{ const name=(it.name||"").trim(); if(!name) return; get(name).sold += nv(it.qtySold); }));
+  const rows=[...m.values()].map(e=>{ const remaining=e.bought-e.sold;
+    const status = remaining<=0 ? "out" : (e.perUnit>0 && remaining<e.perUnit) ? "low" : "ok";
+    return { name:e.name, bought:e.bought, sold:e.sold, remaining, perUnit:e.perUnit, status };
+  });
+  const rank={out:0,low:1,ok:2};
+  return rows.sort((a,b)=> rank[a.status]-rank[b.status] || a.remaining-b.remaining || a.name.localeCompare(b.name));
+}
+
 // ── Credit book: roll the flat entry list up into one record per customer ───────
 const creditSigned = (e) => (e.kind==="payment" ? -1 : 1) * nv(e.amount);  // +taken, -paid
 function customersFromEntries(entries){
   const map=new Map();
   (entries||[]).forEach(e=>{
     const name=(e.customer||"").trim(); if(!name) return;
-    const key=name.toLowerCase();
+    const key=normKey(name);
     const c=map.get(key)||{name, phone:"", taken:0, paid:0, outstanding:0, lastDate:"", count:0};
     if(e.kind==="payment") c.paid+=nv(e.amount); else c.taken+=nv(e.amount);
     c.outstanding=c.taken-c.paid; c.count++;
@@ -194,6 +216,7 @@ const IC = {
   calendar:"M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z",
   trophy:"M8 21h8m-4-4v4m5-17h2a2 2 0 010 4 4 4 0 01-2 2M7 4H5a2 2 0 000 4 4 4 0 002 2m0-8h10v5a5 5 0 01-10 0V4z",
   people:"M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 100 8 4 4 0 000-8zm14 14v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
+  box:"M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12l8.73-5.04M12 22.08V12",
 };
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
@@ -864,9 +887,24 @@ function Overview({batches, dailies, credits, user, onGoto, onGiveCredit, onOpen
   const chartData=[...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-14).map(([date,v])=>({ name:new Date(date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"}), Sales:v.sales, Cash:v.cash }));
 
   const link={background:"transparent",border:"none",color:C.teal,fontSize:12,fontWeight:600,cursor:"pointer",padding:0};
+  const lowStock=stockLevels(batches, dailies).filter(r=>r.status!=="ok");
 
   return(
     <div>
+      {/* low-stock warning */}
+      {lowStock.length>0 && (
+        <Card style={{padding:"12px 16px",marginBottom:14,border:`1px solid ${C.orange}55`,background:"rgba(249,115,22,0.08)",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",cursor:"pointer"}}>
+          <div onClick={()=>onGoto("levels")} style={{flex:1,minWidth:200,display:"flex",alignItems:"center",gap:12}}>
+            <Ico d={IC.alert} size={20} color={C.orange}/>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.text}}>{lowStock.length} item{lowStock.length===1?"":"s"} need restocking</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{lowStock.slice(0,4).map(r=>`${r.name} (${r.remaining<=0?"out":r.remaining+" left"})`).join(", ")}{lowStock.length>4?"…":""}</div>
+            </div>
+          </div>
+          <button onClick={()=>onGoto("levels")} style={{...link,color:C.orange,flexShrink:0}}>View stock levels →</button>
+        </Card>
+      )}
+
       {/* headline KPIs */}
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:isMobile?10:14,marginBottom:12}}>
         <KPICard label="This Month · Sales"   value={monthT.sales} color={C.blue}/>
@@ -1146,16 +1184,16 @@ const toDailyDraft = (d, linked) => {
     : { id:null, date:todayStr(), note:"", expenses:"", items:[blankSale()], credits:[] };
 };
 
-function DailyEntry({initial, products, customers, linkedCredits, onSaved, onCancel}){
+function DailyEntry({initial, products, customers, linkedCredits, stock, onSaved, onCancel}){
   const C=useTheme(); const isMobile=useIsMobile();
   const [draft,setDraft]=useState(()=>toDailyDraft(initial, linkedCredits));
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const isEdit=Boolean(initial);
-  const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(p.name.toLowerCase(),p)); return m; },[products]);
+  const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(normKey(p.name),p)); return m; },[products]);
 
   // Cost per piece is automatic: read it from the matching stock product.
   // Falls back to any cost stored on the row (old records) when the item isn't in stock.
-  const matchOf=(it)=>prodByName.get((it.name||"").trim().toLowerCase());
+  const matchOf=(it)=>prodByName.get(normKey(it.name));
   const costFor=(it)=>{ const p=matchOf(it); return p ? nv(p.costPrice) : nv(it.costPrice); };
   const withCost=(it)=>({...it, costPrice:costFor(it)});  // resolved item for calc/save
 
@@ -1166,7 +1204,7 @@ function DailyEntry({initial, products, customers, linkedCredits, onSaved, onCan
   // when an item name matches a known product, auto-fill its sell price (only if still blank);
   // its cost always comes from stock automatically (see costFor)
   const pickName=(id,name)=>setDraft(d=>({...d,items:d.items.map(it=>{
-    if(it.id!==id) return it; const p=prodByName.get(name.trim().toLowerCase()); if(!p) return {...it,name};
+    if(it.id!==id) return it; const p=prodByName.get(normKey(name)); if(!p) return {...it,name};
     return {...it,name, sellPrice:it.sellPrice||String(p.sellPrice||"")};
   })}));
   // on-credit lines (part of the bill a customer couldn't pay → goes to the Credit Book)
@@ -1247,6 +1285,9 @@ function DailyEntry({initial, products, customers, linkedCredits, onSaved, onCan
           const cost=costFor(it); const inStock=!!matchOf(it);
           const named=it.name.trim()!==""; const knownCost=inStock||nv(it.costPrice)>0;
           const c=saleItemCalc({...it,costPrice:cost});
+          const st=stock&&stock.get(normKey(it.name));
+          const remain=st?st.remaining:null;                       // pieces left before this sale
+          const over=remain!=null && nv(it.qtySold)>remain;        // selling more than what's left
           return(
             <Card key={it.id} style={{padding:16}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
@@ -1280,6 +1321,14 @@ function DailyEntry({initial, products, customers, linkedCredits, onSaved, onCan
               {named&&!knownCost&&(
                 <div style={{fontSize:11,color:C.muted,marginTop:8,display:"flex",alignItems:"center",gap:6}}>
                   <Ico d={IC.alert} size={13} color={C.orange}/> Pick the item from the list, or add it under Add Stock, so its cost is known.
+                </div>
+              )}
+              {named&&remain!=null&&(
+                <div style={{fontSize:11,marginTop:8,display:"flex",alignItems:"center",gap:6,color:over?C.red:C.muted}}>
+                  <Ico d={IC.box} size={13} color={over?C.red:(remain<=0?C.orange:C.muted)}/>
+                  {over
+                    ? `Only ${fmt(remain)} left in stock — you're recording ${fmt(it.qtySold)} sold.`
+                    : (remain<=0 ? "Out of stock — record a stock purchase first." : `${fmt(remain)} left in stock`)}
                 </div>
               )}
             </Card>
@@ -1501,7 +1550,7 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
 // Customer ledger — a modal showing one customer's credit/payment history + running balance
 function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPayment, onEdit, onDelete}){
   const C=useTheme(); const isMobile=useIsMobile();
-  const mine=(entries||[]).filter(e=>(e.customer||"").trim().toLowerCase()===name.toLowerCase())
+  const mine=(entries||[]).filter(e=>normKey(e.customer)===normKey(name))
     .slice().sort((a,b)=> String(a.date||"").localeCompare(String(b.date||"")) || String(a.created_at||"").localeCompare(String(b.created_at||"")));
   const phone=mine.map(e=>e.phone).filter(Boolean).pop()||"";
   let bal=0; const rows=mine.map(e=>{ bal+=creditSigned(e); return {e, bal}; }).reverse();
@@ -1622,7 +1671,7 @@ function CreditEntry({initial, preset, products, customers, onSaved, onCancel}){
   const [draft,setDraft]=useState(()=>toCreditDraft(initial, preset));
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const isEdit=Boolean(initial);
-  const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(p.name.toLowerCase(),p)); return m; },[products]);
+  const prodByName=React.useMemo(()=>{ const m=new Map(); (products||[]).forEach(p=>m.set(normKey(p.name),p)); return m; },[products]);
 
   const isCredit=draft.kind==="credit";
   const namedItems=draft.items.filter(it=>it.name.trim()!=="");
@@ -1635,7 +1684,7 @@ function CreditEntry({initial, preset, products, customers, onSaved, onCancel}){
   const addItem=()=>setDraft(d=>({...d,items:[...d.items,blankCreditItem()]}));
   const removeItem=(id)=>setDraft(d=>({...d,items:d.items.filter(it=>it.id!==id)}));
   const pickName=(id,name)=>setDraft(d=>({...d,items:d.items.map(it=>{
-    if(it.id!==id) return it; const p=prodByName.get(name.trim().toLowerCase()); if(!p) return {...it,name};
+    if(it.id!==id) return it; const p=prodByName.get(normKey(name)); if(!p) return {...it,name};
     return {...it,name, price:it.price||String(p.sellPrice||"")};
   })}));
 
@@ -1766,6 +1815,97 @@ function CreditEntry({initial, preset, products, customers, onSaved, onCancel}){
   );
 }
 
+// ── STOCK LEVELS (live inventory) ─────────────────────────────────────────────
+const STATUS_CFG = (C) => ({
+  out: { label:"Out of stock", color:C.red,    bg:"rgba(240,82,82,0.12)" },
+  low: { label:"Low",          color:C.orange, bg:"rgba(249,115,22,0.12)" },
+  ok:  { label:"In stock",     color:C.green,  bg:"rgba(16,185,129,0.12)" },
+});
+function StockLevels({batches, dailies, user, onAddStock}){
+  const C=useTheme();
+  const rows=stockLevels(batches, dailies);
+  const SC=STATUS_CFG(C);
+  const out=rows.filter(r=>r.status==="out").length;
+  const low=rows.filter(r=>r.status==="low").length;
+
+  if(rows.length===0){
+    return(
+      <div style={{textAlign:"center",maxWidth:440,margin:"60px auto",padding:"0 20px"}}>
+        <div style={{width:60,height:60,borderRadius:16,background:C.tealBg,border:`1px solid ${C.teal}44`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 18px"}}>
+          <Ico d={IC.box} size={26} color={C.teal}/>
+        </div>
+        <div style={{fontSize:18,fontWeight:700,color:C.text}}>No stock yet</div>
+        <div style={{fontSize:13,color:C.muted,marginTop:6,lineHeight:1.6}}>Add stock you bought, then as you record daily sales this page shows what's left and warns you when an item is running low.</div>
+        {canDo(user,"canEdit")&&(
+          <button onClick={onAddStock} style={{marginTop:18,background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"11px 20px",fontWeight:700,fontSize:13,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}>
+            <Ico d={IC.add} size={16} color="#09111e"/> Add stock
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      {/* low-stock warning banner */}
+      {(out+low)>0 && (
+        <Card style={{padding:"14px 18px",marginBottom:16,border:`1px solid ${C.orange}55`,background:"rgba(249,115,22,0.08)",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <Ico d={IC.alert} size={20} color={C.orange}/>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.text}}>Restock needed</div>
+            <div style={{fontSize:12,color:C.muted,marginTop:2}}>
+              {out>0 && <span style={{color:C.red,fontWeight:600}}>{out} out of stock</span>}
+              {out>0 && low>0 && " · "}
+              {low>0 && <span style={{color:C.orange,fontWeight:600}}>{low} running low</span>}
+              {" — "}{rows.filter(r=>r.status!=="ok").slice(0,4).map(r=>r.name).join(", ")}{rows.filter(r=>r.status!=="ok").length>4?"…":""}
+            </div>
+          </div>
+          {canDo(user,"canEdit")&&(
+            <button onClick={onAddStock} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"9px 16px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
+              <Ico d={IC.add} size={15} color="#09111e"/> Add stock
+            </button>
+          )}
+        </Card>
+      )}
+
+      <SLabel style={{marginBottom:12}}>Stock on hand · {rows.length} item{rows.length===1?"":"s"}</SLabel>
+      <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:640}}>
+          <thead>
+            <tr style={{background:C.inputBg}}>
+              {[["Item",0],["Bought",1],["Sold",1],["Remaining",1],["Status",0]].map(([h,r],i)=>(
+                <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 14px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r=>{
+              const s=SC[r.status];
+              const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
+              return(
+                <tr key={r.name}>
+                  <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,fontWeight:700,color:C.text,fontSize:13,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</td>
+                  <td style={{...tdN,color:C.muted,fontWeight:400}}>{fmt(r.bought)}</td>
+                  <td style={{...tdN,color:C.muted,fontWeight:400}}>{fmt(r.sold)}</td>
+                  <td style={{...tdN,color:s.color,fontWeight:700}}>{fmt(r.remaining)}{r.perUnit>0&&r.status!=="out"?<span style={{fontSize:10,color:C.muted,fontWeight:400}}> pcs</span>:""}</td>
+                  <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,whiteSpace:"nowrap"}}>
+                    <span style={{fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,background:s.bg,color:s.color}}>
+                      {r.status==="low"?`Low · ${fmt(r.remaining)} left`:s.label}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{fontSize:11,color:C.muted,marginTop:10,lineHeight:1.6}}>
+        Remaining = pieces bought in stock − pieces sold in daily sales. "Low" means less than one carton left.
+      </div>
+    </div>
+  );
+}
+
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 function LoginScreen({onLogin, isDark, setIsDark}){
   const C=isDark?DARK:LIGHT; const isMobile=useIsMobile();
@@ -1888,6 +2028,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
   const flash=m=>{ setToast(m); setTimeout(()=>setToast(""),2400); };
   const products=React.useMemo(()=>productsFromBatches(batches),[batches]);
   const customers=React.useMemo(()=>customersFromEntries(credits),[credits]);
+  const stock=React.useMemo(()=>{ const m=new Map(); stockLevels(batches,dailies).forEach(r=>m.set(normKey(r.name),r)); return m; },[batches,dailies]);
 
   const navTo=id=>{ setView(id); if(id==="entry") setEditing(null); if(id==="dailyEntry") setEditingDaily(null);
     if(id==="creditEntry"){ setEditingCredit(null); setCreditPreset(null); } if(isMobile) setSidebarOpen(false); };
@@ -1925,13 +2066,13 @@ function MainApp({user, onLogout, isDark, setIsDark}){
     flash(editingCredit?"Entry updated":(row.kind==="payment"?"Payment recorded":"Credit recorded"));
     setView("credit"); setEditingCredit(null); setCreditPreset(null);
   };
-  const entryIdsFor=name=>(credits||[]).filter(e=>(e.customer||"").trim().toLowerCase()===name.trim().toLowerCase()).map(e=>e.id);
+  const entryIdsFor=name=>(credits||[]).filter(e=>normKey(e.customer)===normKey(name)).map(e=>e.id);
   async function saveCustomer(oldName, newName, newPhone){
     const ids=entryIdsFor(oldName); const phone=newPhone||null;
     await Promise.all(ids.map(id=>creditDb.patch(id,{customer:newName, phone})));
     setCredits(prev=>(prev||[]).map(e=>ids.includes(e.id)?{...e,customer:newName,phone}:e));
     setEditCustomer(null);
-    if(openCustomer && openCustomer.trim().toLowerCase()===oldName.trim().toLowerCase()) setOpenCustomer(newName);
+    if(openCustomer && normKey(openCustomer)===normKey(oldName)) setOpenCustomer(newName);
     flash("Customer updated");
   }
 
@@ -1951,7 +2092,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
         const ids=entryIdsFor(t.row.name);
         await Promise.all(ids.map(id=>creditDb.remove(id)));
         setCredits(prev=>(prev||[]).filter(e=>!ids.includes(e.id)));
-        if(openCustomer && openCustomer.trim().toLowerCase()===t.row.name.trim().toLowerCase()) setOpenCustomer(null);
+        if(openCustomer && normKey(openCustomer)===normKey(t.row.name)) setOpenCustomer(null);
         flash("Customer removed");
       }
       else { await stockDb.remove(t.row.id); setBatches(prev=>(prev||[]).filter(b=>b.id!==t.row.id)); flash("Stock deleted"); }
@@ -1962,11 +2103,12 @@ function MainApp({user, onLogout, isDark, setIsDark}){
   NAV.push({id:"daily",label:"Daily Sales",icon:"cash"});
   if(canDo(user,"canEdit")) NAV.push({id:"dailyEntry",label:"Record Day",icon:"calendar"});
   NAV.push({id:"credit",label:"Credit Book",icon:"people"});
+  NAV.push({id:"levels",label:"Stock Levels",icon:"box"});
   NAV.push({id:"dashboard",label:"Stock & Profit",icon:"wallet"});
   if(canDo(user,"canEdit")) NAV.push({id:"entry",label:"Add Stock",icon:"add"});
   NAV.push({id:"reports",label:"Reports",icon:"print"});
   const creditTitle=editingCredit?"Edit Entry":(creditPreset?.kind==="payment"?"Record Payment":"Give Credit");
-  const TITLES={home:"Business Overview",daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",credit:"Credit Book",creditEntry:creditTitle,dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
+  const TITLES={home:"Business Overview",daily:"Daily Sales",dailyEntry:editingDaily?"Edit Day":"Record Day",credit:"Credit Book",creditEntry:creditTitle,levels:"Stock Levels",dashboard:"Stock & Profit",entry:editing?"Edit Stock":"Add Stock",reports:"Reports & Printing"};
   const loading = batches===null || dailies===null || credits===null;
 
   return(
@@ -2051,7 +2193,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
                 ? <DailySales dailies={dailies} credits={credits} user={user} onEdit={startEditDaily} onDelete={d=>setToDelete({kind:"daily",row:d})} onNew={()=>navTo("dailyEntry")}/>
               : view==="dailyEntry"
                 ? canDo(user,"canEdit")
-                  ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} customers={customers} linkedCredits={editingDaily?(credits||[]).filter(e=>e.daily_id===editingDaily.id && e.kind!=="payment"):[]} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
+                  ? <DailyEntry key={editingDaily?editingDaily.id:"new-daily"} initial={editingDaily} products={products} customers={customers} stock={stock} linkedCredits={editingDaily?(credits||[]).filter(e=>e.daily_id===editingDaily.id && e.kind!=="payment"):[]} onSaved={onSavedDaily} onCancel={()=>{setView("daily");setEditingDaily(null);}}/>
                   : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record sales.</div>
               : view==="credit"
                 ? <CreditBook entries={credits} user={user} onGiveCredit={giveCredit} onOpenCustomer={setOpenCustomer} onEditCustomer={setEditCustomer} onDeleteCustomer={c=>setToDelete({kind:"customer",row:c})}/>
@@ -2059,6 +2201,8 @@ function MainApp({user, onLogout, isDark, setIsDark}){
                 ? canDo(user,"canEdit")
                   ? <CreditEntry key={editingCredit?editingCredit.id:"new-credit"} initial={editingCredit} preset={creditPreset} products={products} customers={customers} onSaved={onSavedCredit} onCancel={()=>{setView("credit");setEditingCredit(null);setCreditPreset(null);}}/>
                   : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to record credit.</div>
+              : view==="levels"
+                ? <StockLevels batches={batches} dailies={dailies} user={user} onAddStock={()=>navTo("entry")}/>
               : view==="dashboard"
                 ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={b=>setToDelete({kind:"stock",row:b})} onNew={()=>navTo("entry")} onPrint={b=>setReport({type:"batch",batch:b})}/>
               : view==="reports"
