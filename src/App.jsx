@@ -84,6 +84,8 @@ const nv  = v => Number(v) || 0;
 const fmt = v => nv(v).toLocaleString();
 // match item/customer names case-insensitively and tolerant of extra spaces ("South  Beer" == "South Beer")
 const normKey = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+// tidy a name for display (collapses accidental double spaces) without lower-casing
+const cleanName = s => String(s||"").trim().replace(/\s+/g," ");
 const uid = () => Math.random().toString(36).slice(2,9);
 const compact = v => { const a=Math.abs(v); return a>=1e6?`${(v/1e6).toFixed(a>=1e7?0:1)}M`:a>=1e3?`${Math.round(v/1e3)}K`:`${v}`; };
 const itemCalc = (it) => {
@@ -126,7 +128,7 @@ function productsFromBatches(batches){
       const key=normKey(name); const prev=map.get(key);
       if(prev && String(prev._date)>=bdate) return;          // already have prices from a newer (or same) batch
       const pieces=nv(it.piecesPerUnit), costPiece=pieces>0 ? nv(it.costPerUnit)/pieces : 0;
-      map.set(key,{ name, sellPrice:nv(it.pricePerPiece), costPrice:Math.round(costPiece), _date:bdate });
+      map.set(key,{ name:cleanName(name), sellPrice:nv(it.pricePerPiece), costPrice:Math.round(costPiece), _date:bdate });
     });
   });
   return [...map.values()].map(({_date,...p})=>p).sort((a,b)=>a.name.localeCompare(b.name));
@@ -146,7 +148,7 @@ function stockLevels(batches, dailies){
   (dailies||[]).forEach(d=>(d.items||[]).forEach(it=>{ const name=(it.name||"").trim(); if(!name) return; get(name).sold += nv(it.qtySold); }));
   const rows=[...m.values()].map(e=>{ const remaining=e.bought-e.sold;
     const status = remaining<=0 ? "out" : (e.perUnit>0 && remaining<e.perUnit) ? "low" : "ok";
-    return { name:e.name, bought:e.bought, sold:e.sold, remaining, perUnit:e.perUnit, status };
+    return { name:cleanName(e.name), bought:e.bought, sold:e.sold, remaining, perUnit:e.perUnit, status };
   });
   const rank={out:0,low:1,ok:2};
   return rows.sort((a,b)=> rank[a.status]-rank[b.status] || a.remaining-b.remaining || a.name.localeCompare(b.name));
@@ -159,7 +161,7 @@ function customersFromEntries(entries){
   (entries||[]).forEach(e=>{
     const name=(e.customer||"").trim(); if(!name) return;
     const key=normKey(name);
-    const c=map.get(key)||{name, phone:"", taken:0, paid:0, outstanding:0, lastDate:"", count:0};
+    const c=map.get(key)||{name:cleanName(name), phone:"", taken:0, paid:0, outstanding:0, lastDate:"", count:0};
     if(e.kind==="payment") c.paid+=nv(e.amount); else c.taken+=nv(e.amount);
     c.outstanding=c.taken-c.paid; c.count++;
     if(e.phone && (!c.phone || String(e.date||"")>=String(c.phoneDate||""))){ c.phone=e.phone; c.phoneDate=e.date||""; }
@@ -878,7 +880,7 @@ function Overview({batches, dailies, credits, user, onGoto, onGiveCredit, onOpen
   const stock=(batches||[]).reduce((a,b)=>{ const t=batchCalc(b); a.spent+=t.spent; a.profit+=t.profitOnStock; return a; },{spent:0,profit:0});
 
   const lb=new Map();
-  (dailies||[]).forEach(d=>(d.items||[]).forEach(it=>{ const name=(it.name||"").trim(); if(!name) return; const c=saleItemCalc(it); const e=lb.get(name)||{name,qty:0,revenue:0}; e.qty+=c.qty; e.revenue+=c.revenue; lb.set(name,e); }));
+  (dailies||[]).forEach(d=>(d.items||[]).forEach(it=>{ const nm=cleanName(it.name); if(!nm) return; const key=normKey(nm); const c=saleItemCalc(it); const e=lb.get(key)||{name:nm,qty:0,revenue:0}; e.qty+=c.qty; e.revenue+=c.revenue; lb.set(key,e); }));
   const topItems=[...lb.values()].sort((a,b)=>b.revenue-a.revenue).slice(0,5);
   const topRev=topItems.length?topItems[0].revenue:0;
 
@@ -991,12 +993,12 @@ function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
   const todayT = sumRows(dailies.filter(d=>d.date===today));
   const monthT = sumRows(dailies.filter(d=>String(d.date||"").startsWith(ym)));
 
-  // Leaderboard: aggregate each item across every day
+  // Leaderboard: aggregate each item across every day (whitespace/case-insensitive)
   const lb=new Map();
   dailies.forEach(d=>(d.items||[]).forEach(it=>{
-    const name=(it.name||"").trim(); if(!name) return;
-    const c=saleItemCalc(it); const e=lb.get(name)||{name,qty:0,revenue:0,profit:0};
-    e.qty+=c.qty; e.revenue+=c.revenue; e.profit+=c.profit; lb.set(name,e);
+    const nm=cleanName(it.name); if(!nm) return; const key=normKey(nm);
+    const c=saleItemCalc(it); const e=lb.get(key)||{name:nm,qty:0,revenue:0,profit:0};
+    e.qty+=c.qty; e.revenue+=c.revenue; e.profit+=c.profit; lb.set(key,e);
   }));
   const leaders=[...lb.values()].sort((a,b)=>b.revenue-a.revenue);
   const topRevenue=leaders.length?leaders[0].revenue:0;
@@ -1114,7 +1116,7 @@ function DailySales({dailies, credits, user, onEdit, onDelete, onNew}){
             <tbody>
               {shownDays.map(d=>{
                 const t=dailyCalc(d); const cr=creditOf(d); const cash=t.revenue-cr;
-                const top=[...(d.items||[])].map(it=>({name:it.name,...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
+                const top=[...(d.items||[])].map(it=>({name:cleanName(it.name),...saleItemCalc(it)})).sort((a,b)=>b.revenue-a.revenue)[0];
                 const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
                 return(
                   <tr key={d.id}>
