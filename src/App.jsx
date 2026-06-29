@@ -314,49 +314,69 @@ function Dashboard({batches, user, onEdit, onDelete, onNew, onPrint}){
         </ResponsiveContainer>
       </Card>
 
-      {/* batch list */}
+      {/* batch list — spreadsheet-style table (scrolls sideways on small phones) */}
       <SLabel style={{marginBottom:12}}>Stock Batches</SLabel>
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":isTablet?"1fr 1fr":"repeat(3,1fr)",gap:14}}>
-        {batches.map(b=>{
-          const t=batchCalc(b);
-          const dateStr=b.date?new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}):"No date";
-          return(
-            <Card key={b.id} style={{padding:18}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                <div style={{minWidth:0}}>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.name}</div>
-                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{dateStr} · {b.items.length} items</div>
-                </div>
-                <div style={{display:"flex",gap:6,flexShrink:0}}>
-                  <button onClick={()=>onPrint(b)} title="Print report" style={{background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                    <Ico d={IC.print} size={14} color={C.muted}/>
-                  </button>
-                  {canDo(user,"canEdit")&&(
-                    <button onClick={()=>onEdit(b)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                      <Ico d={IC.edit} size={14} color={C.teal}/>
-                    </button>
-                  )}
-                  {canDo(user,"canDelete")&&(
-                    <button onClick={()=>onDelete(b)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
-                      <Ico d={IC.trash} size={14} color={C.red}/>
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
-                <div><div style={{fontSize:10,color:C.muted}}>Spent</div><div style={{fontSize:14,fontWeight:600,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(t.spent)}</div></div>
-                <div><div style={{fontSize:10,color:C.muted}}>Expected sales</div><div style={{fontSize:14,fontWeight:600,color:C.text,fontVariantNumeric:"tabular-nums"}}>{fmt(t.sales)}</div></div>
-              </div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginTop:12,paddingTop:12,borderTop:`1px solid ${C.divider}`}}>
-                <div>
-                  <div style={{fontSize:10,color:C.muted}}>Take-home profit</div>
-                  <div style={{fontSize:18,fontWeight:700,color:t.takeHome>=0?C.green:C.red,fontVariantNumeric:"tabular-nums"}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</div>
-                </div>
-                <span style={{fontSize:11,padding:"2px 9px",borderRadius:20,fontWeight:600,background:C.tealBg,color:C.teal}}>{(t.margin*100).toFixed(1)}%</span>
-              </div>
-            </Card>
-          );
-        })}
+      <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.cardB}`,borderRadius:12,background:C.card}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:760}}>
+          <thead>
+            <tr style={{background:C.inputBg}}>
+              {[["Stock",0],["Date",0],["Items",1],["Spent",1],["Exp. sales",1],["Take-home",1],["Margin",1],["",0]].map(([h,r],i)=>(
+                <th key={i} style={{textAlign:r?"right":"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",color:C.muted,fontWeight:600,padding:"11px 14px",borderBottom:`1px solid ${C.cardB}`,whiteSpace:"nowrap"}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {batches.map(b=>{
+              const t=batchCalc(b);
+              const dateStr=b.date?new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}):"No date";
+              const tdN={padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",fontWeight:600,fontSize:13};
+              return(
+                <tr key={b.id}>
+                  <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,fontWeight:700,color:C.text,fontSize:13,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</td>
+                  <td style={{padding:"10px 14px",borderBottom:`1px solid ${C.divider}`,color:C.muted,fontSize:12,whiteSpace:"nowrap"}}>{dateStr}</td>
+                  <td style={{...tdN,color:C.muted,fontWeight:400}}>{b.items.length}</td>
+                  <td style={{...tdN,color:C.orange}}>{fmt(t.spent)}</td>
+                  <td style={{...tdN,color:C.blue}}>{fmt(t.sales)}</td>
+                  <td style={{...tdN,color:t.takeHome>=0?C.green:C.red}}>{t.takeHome>=0?"+":""}{fmt(t.takeHome)}</td>
+                  <td style={{...tdN,color:C.teal}}>{(t.margin*100).toFixed(1)}%</td>
+                  <td style={{padding:"10px 10px",borderBottom:`1px solid ${C.divider}`,textAlign:"right",whiteSpace:"nowrap"}}>
+                    <div style={{display:"inline-flex",gap:6}}>
+                      <button onClick={()=>onPrint(b)} title="Print report" style={{background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                        <Ico d={IC.print} size={14} color={C.muted}/>
+                      </button>
+                      {canDo(user,"canEdit")&&(
+                        <button onClick={()=>onEdit(b)} title="Edit" style={{background:C.tealBg,border:`1px solid ${C.teal}44`,borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                          <Ico d={IC.edit} size={14} color={C.teal}/>
+                        </button>
+                      )}
+                      {canDo(user,"canDelete")&&(
+                        <button onClick={()=>onDelete(b)} title="Delete" style={{background:"rgba(240,82,82,0.1)",border:"1px solid rgba(240,82,82,0.3)",borderRadius:6,padding:6,cursor:"pointer",display:"flex"}}>
+                          <Ico d={IC.trash} size={14} color={C.red}/>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            {(()=>{ const tf={padding:"11px 14px",textAlign:"right",fontWeight:700,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"};
+              return(
+                <tr style={{background:C.inputBg}}>
+                  <td style={{padding:"11px 14px",fontWeight:700,color:C.text,fontSize:12}}>{batches.length} batch{batches.length===1?"":"es"}</td>
+                  <td/>
+                  <td/>
+                  <td style={{...tf,color:C.orange}}>{fmt(totals.spent)}</td>
+                  <td style={{...tf,color:C.blue}}>{fmt(totals.sales)}</td>
+                  <td style={{...tf,color:totals.takeHome>=0?C.green:C.red}}>{totals.takeHome>=0?"+":""}{fmt(totals.takeHome)}</td>
+                  <td style={{...tf,color:C.teal}}>{margin}%</td>
+                  <td/>
+                </tr>
+              );
+            })()}
+          </tfoot>
+        </table>
       </div>
     </div>
   );
