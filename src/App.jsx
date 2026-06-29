@@ -804,37 +804,162 @@ function SummaryReport({batches}){
   );
 }
 
+// Daily takings → a sales & cash report (what came in, what went on credit)
+function DailyReport({dailies, credits}){
+  const creditByDay=new Map();
+  (credits||[]).forEach(e=>{ if(e.daily_id && e.kind!=="payment") creditByDay.set(e.daily_id,(creditByDay.get(e.daily_id)||0)+nv(e.amount)); });
+  const rows=[...(dailies||[])].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));
+  const g={qty:0,sales:0,credit:0,cash:0,take:0};
+  const span=rows.length ? `${dmy(rows[0].date)} – ${dmy(rows[rows.length-1].date)}` : "—";
+  return(
+    <>
+      <ReportHeader title="Daily Sales & Cash Report"/>
+      <div style={{fontSize:12,color:RP.soft,marginBottom:14}}>Period: <strong style={{color:RP.ink}}>{span}</strong> · {rows.length} day{rows.length===1?"":"s"} trading</div>
+      <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",minWidth:520}}>
+        <thead><Trow head cells={["Date","Sold","Sales","On credit","Cash in","Take-home"]} right={[1,2,3,4,5]}/></thead>
+        <tbody>
+          {rows.map((d,i)=>{ const t=dailyCalc(d), cr=creditByDay.get(d.id)||0, cash=t.revenue-cr;
+            g.qty+=t.qty; g.sales+=t.revenue; g.credit+=cr; g.cash+=cash; g.take+=t.takeHome;
+            return <Trow key={i} cells={[dmy(d.date), fmt(t.qty), fmt(t.revenue), cr>0?fmt(cr):"—", fmt(cash), `${t.takeHome>=0?"+":""}${fmt(t.takeHome)}`]} right={[1,2,3,4,5]}/>;
+          })}
+          <Trow strong cells={["TOTAL", fmt(g.qty), fmt(g.sales), fmt(g.credit), fmt(g.cash), `${g.take>=0?"+":""}${fmt(g.take)}`]} right={[1,2,3,4,5]}/>
+        </tbody>
+      </table>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:16,marginTop:22}}>
+        {[["Total sales",money(g.sales)],["Cash collected",money(g.cash)],["Given on credit",money(g.credit)],["Take-home profit",money(g.take)]].map(([k,v])=>(
+          <div key={k}><div style={{fontSize:11,color:RP.soft}}>{k}</div><div style={{fontWeight:800,fontSize:15}}>{v}</div></div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// All customers who owe → a debtors list
+function DebtorsReport({credits}){
+  const custs=customersFromEntries(credits||[]).filter(c=>c.outstanding>0.0001);
+  const total=custs.reduce((s,c)=>s+c.outstanding,0);
+  return(
+    <>
+      <ReportHeader title="Outstanding Debts"/>
+      <div style={{fontSize:12,color:RP.soft,marginBottom:14}}>As of {dmy(todayStr())} · <strong style={{color:RP.ink}}>{custs.length}</strong> customer{custs.length===1?"":"s"} owing</div>
+      {custs.length===0
+        ? <div style={{fontSize:13,color:RP.soft,padding:"10px 0"}}>No outstanding debts — everyone is paid up.</div>
+        : <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",minWidth:520}}>
+              <thead><Trow head cells={["#","Customer","Phone","Taken","Paid","Outstanding"]} right={[3,4,5]}/></thead>
+              <tbody>
+                {custs.map((c,i)=><Trow key={i} cells={[i+1, c.name, c.phone||"—", fmt(c.taken), fmt(c.paid), fmt(c.outstanding)]} right={[3,4,5]}/>)}
+                <Trow strong cells={["", "TOTAL OWED", "", "", "", money(total)]} right={[3,4,5]}/>
+              </tbody>
+            </table>
+          </div>}
+    </>
+  );
+}
+
+// One customer → a statement they can keep (ledger + balance due)
+function CustomerStatement({name, entries}){
+  const mine=(entries||[]).filter(e=>normKey(e.customer)===normKey(name))
+    .slice().sort((a,b)=> String(a.date||"").localeCompare(String(b.date||"")) || String(a.created_at||"").localeCompare(String(b.created_at||"")));
+  const phone=mine.map(e=>e.phone).filter(Boolean).pop()||"";
+  let bal=0;
+  return(
+    <>
+      <ReportHeader title="Customer Statement"/>
+      <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:16}}>
+        <div><div style={{fontSize:11,color:RP.soft}}>Customer</div><div style={{fontWeight:800,fontSize:16}}>{cleanName(name)}</div>{phone&&<div style={{fontSize:12,color:RP.soft,marginTop:2}}>{phone}</div>}</div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:11,color:RP.soft}}>Statement date</div><div style={{fontWeight:700}}>{dmy(todayStr())}</div></div>
+      </div>
+      <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",minWidth:520}}>
+        <thead><Trow head cells={["Date","Details","Credit","Payment","Balance"]} right={[2,3,4]}/></thead>
+        <tbody>
+          {mine.map((e,i)=>{ const isPay=e.kind==="payment"; bal += isPay ? -nv(e.amount) : nv(e.amount);
+            const detail = isPay ? (e.note||"Payment received")
+              : (e.note || ((e.items&&e.items.length) ? e.items.map(it=>`${fmt(it.qty)}× ${cleanName(it.name)}`).join(", ") : "Drinks on credit"));
+            return <Trow key={i} cells={[dmy(e.date), detail, isPay?"—":fmt(e.amount), isPay?fmt(e.amount):"—", fmt(bal)]} right={[2,3,4]}/>;
+          })}
+        </tbody>
+      </table>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:18,paddingTop:14,borderTop:`2px solid ${RP.ink}`}}>
+        <span style={{fontWeight:800,fontSize:15}}>{bal>0?"BALANCE DUE":bal<0?"WE OWE CUSTOMER":"FULLY SETTLED"}</span>
+        <span style={{fontWeight:800,fontSize:18,color:bal>0?RP.red:RP.green}}>{money(Math.abs(bal))}</span>
+      </div>
+      <div style={{marginTop:34,display:"flex",justifyContent:"space-between",fontSize:11,color:RP.soft}}>
+        <span>Customer signature: ____________________</span>
+        <span>Served by: ____________________</span>
+      </div>
+    </>
+  );
+}
+
 // Reports tab — pick what to print
-function ReportsView({batches, onPrintBatch, onPrintSummary}){
+function ReportsView({batches, dailies, credits, onPrint}){
   const C=useTheme(); const isMobile=useIsMobile();
-  if(batches.length===0) return <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>No stock yet — add some, then you can print reports.</div>;
+  const debtors=customersFromEntries(credits||[]).filter(c=>c.outstanding>0.0001).length;
+  const everyone=customersFromEntries(credits||[]);
+  const nothing = (batches||[]).length===0 && (dailies||[]).length===0 && (credits||[]).length===0;
+  if(nothing) return <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>Nothing to report yet — add stock, record sales or give credit first.</div>;
+
+  const BigCard=({title, sub, disabled, onClick})=>(
+    <Card style={{padding:18,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",opacity:disabled?0.55:1}}>
+      <div style={{minWidth:0}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.text}}>{title}</div>
+        <div style={{fontSize:12,color:C.muted,marginTop:2}}>{sub}</div>
+      </div>
+      <button onClick={onClick} disabled={disabled} style={{background:disabled?C.inputBg:C.teal,border:disabled?`1px solid ${C.cardB}`:"none",borderRadius:8,color:disabled?C.muted:"#09111e",padding:"10px 18px",fontWeight:700,fontSize:13,cursor:disabled?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+        <Ico d={IC.print} size={16} color={disabled?C.muted:"#09111e"}/> Print
+      </button>
+    </Card>
+  );
+
   return(
     <div>
-      <Card style={{padding:18,marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
-        <div>
-          <div style={{fontSize:15,fontWeight:700,color:C.text}}>Full stock summary</div>
-          <div style={{fontSize:12,color:C.muted,marginTop:2}}>All {batches.length} batches, totals and margins — one page.</div>
-        </div>
-        <button onClick={onPrintSummary} style={{background:C.teal,border:"none",borderRadius:8,color:"#09111e",padding:"10px 18px",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
-          <Ico d={IC.print} size={16} color="#09111e"/> Print summary
-        </button>
-      </Card>
-      <SLabel style={{marginBottom:12}}>Print a single purchase plan</SLabel>
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
-        {batches.map(b=>{ const t=batchCalc(b);
-          return(
-            <Card key={b.id} style={{padding:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+      <SLabel style={{marginBottom:12}}>Business reports</SLabel>
+      <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12,marginBottom:20}}>
+        <BigCard title="Daily sales & cash report" sub={`Every trading day — sales, credit, cash and profit (${(dailies||[]).length} day${(dailies||[]).length===1?"":"s"}).`} disabled={(dailies||[]).length===0} onClick={()=>onPrint({type:"daily"})}/>
+        <BigCard title="Outstanding debts" sub={debtors>0?`${debtors} customer${debtors===1?"":"s"} owe you money.`:"Nobody owes you right now."} disabled={debtors===0} onClick={()=>onPrint({type:"debtors"})}/>
+        <BigCard title="Full stock summary" sub={`All ${(batches||[]).length} stock batch${(batches||[]).length===1?"":"es"}, totals and margins.`} disabled={(batches||[]).length===0} onClick={()=>onPrint({type:"summary"})}/>
+      </div>
+
+      {everyone.length>0 && (<>
+        <SLabel style={{marginBottom:12}}>Customer statements</SLabel>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12,marginBottom:20}}>
+          {everyone.map(c=>(
+            <Card key={c.name} style={{padding:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
               <div style={{minWidth:0}}>
-                <div style={{fontSize:14,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.name}</div>
-                <div style={{fontSize:11,color:C.muted,marginTop:2}}>{dmy(b.date)} · spent {fmt(t.spent)}</div>
+                <div style={{fontSize:14,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div>
+                <div style={{fontSize:11,color:c.outstanding>0?C.orange:C.muted,marginTop:2}}>{c.outstanding>0?`owes ${fmt(c.outstanding)}`:"settled up"}</div>
               </div>
-              <button onClick={()=>onPrintBatch(b)} title="Print plan" style={{flexShrink:0,background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 14px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:7}}>
+              <button onClick={()=>onPrint({type:"statement",name:c.name})} title="Print statement" style={{flexShrink:0,background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 14px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:7}}>
                 <Ico d={IC.print} size={15} color={C.muted}/> Print
               </button>
             </Card>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      </>)}
+
+      {(batches||[]).length>0 && (<>
+        <SLabel style={{marginBottom:12}}>Stock purchase plans</SLabel>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+          {batches.map(b=>{ const t=batchCalc(b);
+            return(
+              <Card key={b.id} style={{padding:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.name}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{dmy(b.date)} · spent {fmt(t.spent)}</div>
+                </div>
+                <button onClick={()=>onPrint({type:"batch",batch:b})} title="Print plan" style={{flexShrink:0,background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 14px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:7}}>
+                  <Ico d={IC.print} size={15} color={C.muted}/> Print
+                </button>
+              </Card>
+            );
+          })}
+        </div>
+      </>)}
     </div>
   );
 }
@@ -1550,7 +1675,7 @@ function CreditBook({entries, user, onGiveCredit, onOpenCustomer, onEditCustomer
 }
 
 // Customer ledger — a modal showing one customer's credit/payment history + running balance
-function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPayment, onEdit, onDelete}){
+function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPayment, onEdit, onDelete, onPrintStatement}){
   const C=useTheme(); const isMobile=useIsMobile();
   const mine=(entries||[]).filter(e=>normKey(e.customer)===normKey(name))
     .slice().sort((a,b)=> String(a.date||"").localeCompare(String(b.date||"")) || String(a.created_at||"").localeCompare(String(b.created_at||"")));
@@ -1618,7 +1743,10 @@ function CustomerDetail({name, entries, user, onClose, onGiveCredit, onRecordPay
           })}
         </div>
 
-        <div style={{padding:"12px 16px",borderTop:`1px solid ${C.cardB}`,textAlign:"right"}}>
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${C.cardB}`,display:"flex",justifyContent:"space-between",gap:10}}>
+          <button onClick={()=>onPrintStatement(name)} style={{background:C.inputBg,border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 16px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:7}}>
+            <Ico d={IC.print} size={15} color={C.muted}/> Print statement
+          </button>
           <button onClick={onClose} style={{background:"transparent",border:`1px solid ${C.cardB}`,borderRadius:8,color:C.text,padding:"9px 18px",fontSize:13,cursor:"pointer"}}>Close</button>
         </div>
       </div>
@@ -2208,7 +2336,7 @@ function MainApp({user, onLogout, isDark, setIsDark}){
               : view==="dashboard"
                 ? <Dashboard batches={batches} user={user} onEdit={startEdit} onDelete={b=>setToDelete({kind:"stock",row:b})} onNew={()=>navTo("entry")} onPrint={b=>setReport({type:"batch",batch:b})}/>
               : view==="reports"
-                ? <ReportsView batches={batches} onPrintBatch={b=>setReport({type:"batch",batch:b})} onPrintSummary={()=>setReport({type:"summary"})}/>
+                ? <ReportsView batches={batches} dailies={dailies} credits={credits} onPrint={setReport}/>
               : canDo(user,"canEdit")
                 ? <StockEntry key={editing?editing.id:"new"} initial={editing} onSaved={onSaved} onCancel={()=>{setView("dashboard");setEditing(null);}} onPrint={b=>setReport({type:"batch",batch:b})}/>
                 : <div style={{color:C.muted,padding:40,textAlign:"center",fontSize:13}}>You don't have permission to enter stock.</div>}
@@ -2222,9 +2350,16 @@ function MainApp({user, onLogout, isDark, setIsDark}){
         onGiveCredit={p=>{setOpenCustomer(null);giveCredit(p);}}
         onRecordPayment={p=>{setOpenCustomer(null);giveCredit(p);}}
         onEdit={e=>{setOpenCustomer(null);startEditCredit(e);}}
-        onDelete={e=>setToDelete({kind:"credit",row:e})}/>}
+        onDelete={e=>setToDelete({kind:"credit",row:e})}
+        onPrintStatement={nm=>{setOpenCustomer(null);setReport({type:"statement",name:nm});}}/>}
       {toDelete&&<ConfirmDelete target={toDelete} onCancel={()=>setToDelete(null)} onConfirm={confirmDelete}/>}
-      {report&&<PrintFrame onClose={()=>setReport(null)}>{report.type==="summary"?<SummaryReport batches={batches}/>:<BatchReport batch={report.batch}/>}</PrintFrame>}
+      {report&&<PrintFrame onClose={()=>setReport(null)}>{
+        report.type==="summary"   ? <SummaryReport batches={batches}/>
+        : report.type==="daily"   ? <DailyReport dailies={dailies} credits={credits}/>
+        : report.type==="debtors" ? <DebtorsReport credits={credits}/>
+        : report.type==="statement" ? <CustomerStatement name={report.name} entries={credits}/>
+        : <BatchReport batch={report.batch}/>
+      }</PrintFrame>}
       {toast&&(
         <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:C.card,border:`1px solid ${C.cardB}`,borderRadius:20,padding:"10px 18px",fontSize:13,fontWeight:600,color:C.text,zIndex:60,display:"flex",alignItems:"center",gap:8,boxShadow:"0 8px 24px rgba(0,0,0,0.3)"}}>
           <Ico d={IC.check} size={15} color={C.teal}/> {toast}
